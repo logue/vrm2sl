@@ -3,7 +3,19 @@ name = "vrm2sl"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "vrm2sl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vrm2sl"
+path = "src/main.rs"
+
 [dependencies]
+anyhow = "1"
+gltf = { version = "1.4", features = ["import", "names"] }
 nalgebra = "0.34.1"
 thiserror = "2"
 image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
