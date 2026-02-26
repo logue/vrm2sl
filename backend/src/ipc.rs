@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +42,13 @@ pub struct LoadSettingsRequest {
     pub path: String,
 }
 
+/// IPC payload for generating a backend-side preview GLB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewRequest {
+    pub input_path: String,
+    pub options: ConvertOptions,
+}
+
 /// Analyze a source model through the IPC boundary.
 pub fn analyze_vrm_ipc(request: AnalyzeRequest) -> Result<AnalysisReport, String> {
     let input = PathBuf::from(&request.input_path);
@@ -65,6 +76,16 @@ pub fn convert_vrm_to_gdb_ipc(request: ConvertRequest) -> Result<ConversionRepor
     Ok(report)
 }
 
+/// Build a preview GLB file through the IPC boundary and return its path.
+pub fn build_preview_glb_ipc(request: PreviewRequest) -> Result<String, String> {
+    let input = PathBuf::from(&request.input_path);
+    let output = create_preview_output_path().map_err(|err| err.to_string())?;
+
+    convert_vrm_to_gdb(&input, &output, request.options).map_err(|err| err.to_string())?;
+
+    Ok(output.to_string_lossy().to_string())
+}
+
 /// Save project settings through the IPC boundary.
 pub fn save_project_settings_ipc(request: SaveSettingsRequest) -> Result<(), String> {
     let path = PathBuf::from(request.path);
@@ -75,4 +96,15 @@ pub fn save_project_settings_ipc(request: SaveSettingsRequest) -> Result<(), Str
 pub fn load_project_settings_ipc(request: LoadSettingsRequest) -> Result<ProjectSettings, String> {
     let path = PathBuf::from(request.path);
     load_project_settings(&path).map_err(|err| err.to_string())
+}
+
+fn create_preview_output_path() -> anyhow::Result<PathBuf> {
+    let mut dir = std::env::temp_dir();
+    dir.push("vrm2sl-preview");
+    fs::create_dir_all(&dir)?;
+
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let file_name = format!("preview-{}-{}.glb", std::process::id(), timestamp);
+
+    Ok(dir.join(file_name))
 }

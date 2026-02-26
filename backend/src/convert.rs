@@ -216,34 +216,48 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         })
         .collect();
 
-    let oversized_count = texture_infos
+    let medium_oversized_count = texture_infos
         .iter()
-        .filter(|texture| texture.width > 1024 || texture.height > 1024)
+        .filter(|texture| {
+            let max_dim = texture.width.max(texture.height);
+            max_dim > 1024 && max_dim <= 2048
+        })
+        .count();
+    let large_oversized_count = texture_infos
+        .iter()
+        .filter(|texture| texture.width.max(texture.height) > 2048)
         .count();
 
-    if oversized_count > 0 {
+    if medium_oversized_count > 0 {
         issues.push(ValidationIssue {
-            severity: if options.texture_auto_resize {
-                Severity::Info
-            } else {
-                Severity::Warning
-            },
-            code: "TEXTURE_OVERSIZE".to_string(),
+            severity: Severity::Warning,
+            code: "TEXTURE_OVERSIZE_1024_2048".to_string(),
+            message: format!(
+                "⚠️ Detected {} texture(s) with max edge between 1025 and 2048. Enable the 1024px resize option if you want to downscale them",
+                medium_oversized_count
+            ),
+        });
+    }
+
+    if large_oversized_count > 0 {
+        issues.push(ValidationIssue {
+            severity: Severity::Warning,
+            code: "TEXTURE_OVERSIZE_OVER_2048".to_string(),
             message: if options.texture_auto_resize {
                 format!(
-                    "⚠️ Detected {} oversized texture(s). They will be resized to a 1024px max on export",
-                    oversized_count
+                    "⚠️ Detected {} texture(s) larger than 2048. They will be resized to a 1024px max on export",
+                    large_oversized_count
                 )
             } else {
                 format!(
-                    "⚠️ Detected {} oversized texture(s). Second Life upload cost may increase",
-                    oversized_count
+                    "⚠️ Detected {} texture(s) larger than 2048. They will be resized to a 2048px max on export",
+                    large_oversized_count
                 )
             },
         });
     }
 
-    let fee_estimate = estimate_texture_fee(&texture_infos);
+    let fee_estimate = estimate_texture_fee(&texture_infos, options.texture_auto_resize);
 
     let estimated_height_cm = estimate_height_cm(&document, &buffers).unwrap_or(170.0);
 
@@ -521,7 +535,10 @@ fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<Validation
 }
 
 /// Estimate texture upload fees before/after resize policy.
-fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
+fn estimate_texture_fee(
+    texture_infos: &[TextureInfo],
+    auto_resize_to_1024: bool,
+) -> UploadFeeEstimate {
     let before = texture_infos
         .iter()
         .map(|texture| fee_per_texture(texture.width, texture.height))
@@ -530,9 +547,9 @@ fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
     let after = texture_infos
         .iter()
         .map(|texture| {
-            let clamped_width = texture.width.min(1024);
-            let clamped_height = texture.height.min(1024);
-            fee_per_texture(clamped_width, clamped_height)
+            let (projected_width, projected_height) =
+                projected_texture_size(texture.width, texture.height, auto_resize_to_1024);
+            fee_per_texture(projected_width, projected_height)
         })
         .sum::<u32>();
 
@@ -547,6 +564,29 @@ fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
         after_resize_linden_dollar: after,
         reduction_percent,
     }
+}
+
+/// Estimate texture size after export policy is applied.
+fn projected_texture_size(width: u32, height: u32, auto_resize_to_1024: bool) -> (u32, u32) {
+    let max_dim = width.max(height);
+    let target_max = if max_dim <= 1024 {
+        1024
+    } else if max_dim <= 2048 {
+        if auto_resize_to_1024 { 1024 } else { max_dim }
+    } else if auto_resize_to_1024 {
+        1024
+    } else {
+        2048
+    };
+
+    if max_dim <= target_max {
+        return (width, height);
+    }
+
+    let scale = target_max as f64 / max_dim as f64;
+    let projected_width = (width as f64 * scale).round().max(1.0) as u32;
+    let projected_height = (height as f64 * scale).round().max(1.0) as u32;
+    (projected_width, projected_height)
 }
 
 /// Estimate fee per texture based on max dimension bands.
@@ -619,9 +659,12 @@ fn transform_and_write_glb(
     remove_unsupported_features(&mut json);
     apply_uniform_scale_to_scene_roots(&mut json, scale_factor);
 
-    if texture_auto_resize {
-        apply_texture_resize_to_embedded_images(&mut json, &mut bin, texture_resize_method)?;
-    }
+    apply_texture_resize_to_embedded_images(
+        &mut json,
+        &mut bin,
+        texture_auto_resize,
+        texture_resize_method,
+    )?;
 
     let json_bytes =
         serde_json::to_vec(&json).context("failed to serialize transformed glTF JSON")?;
@@ -651,6 +694,7 @@ fn transform_and_write_glb(
 fn apply_texture_resize_to_embedded_images(
     json: &mut Value,
     bin: &mut Vec<u8>,
+    auto_resize_to_1024: bool,
     interpolation: ResizeInterpolation,
 ) -> Result<()> {
     let Some(buffer_views) = json.get("bufferViews").and_then(Value::as_array) else {
@@ -700,11 +744,22 @@ fn apply_texture_resize_to_embedded_images(
             let decoded = image::load_from_memory(image_bytes)
                 .with_context(|| format!("failed to decode embedded texture view {view_index}"))?;
 
-            if decoded.width() <= 1024 && decoded.height() <= 1024 {
-                continue;
-            }
+            let max_dim = decoded.width().max(decoded.height());
+            let target_max = if max_dim <= 1024 {
+                1024
+            } else if max_dim <= 2048 {
+                if auto_resize_to_1024 { 1024 } else { max_dim }
+            } else if auto_resize_to_1024 {
+                1024
+            } else {
+                2048
+            };
 
-            let resized = resize_texture_to_max(&decoded, 1024, 1024, interpolation);
+            let resized = if max_dim > target_max {
+                resize_texture_to_max(&decoded, target_max, target_max, interpolation)
+            } else {
+                decoded
+            };
             let mut encoded = Vec::<u8>::new();
             resized
                 .write_to(&mut Cursor::new(&mut encoded), image_format)
@@ -976,9 +1031,23 @@ mod tests {
             },
         ];
 
-        let estimate = estimate_texture_fee(&textures);
+        let estimate = estimate_texture_fee(&textures, true);
         assert!(estimate.before_linden_dollar > estimate.after_resize_linden_dollar);
         assert!(estimate.reduction_percent > 0);
+    }
+
+    #[test]
+    fn given_large_texture_when_1024_resize_disabled_then_policy_caps_at_2048() {
+        let (width, height) = projected_texture_size(4096, 2048, false);
+        assert_eq!(width, 2048);
+        assert_eq!(height, 1024);
+    }
+
+    #[test]
+    fn given_mid_texture_when_1024_resize_disabled_then_size_is_kept() {
+        let (width, height) = projected_texture_size(1800, 900, false);
+        assert_eq!(width, 1800);
+        assert_eq!(height, 900);
     }
 
     #[test]

@@ -7,8 +7,9 @@ use vrm2sl_tauri_lib::{
     LogLevel,
     convert::{AnalysisReport, ConversionReport},
     ipc::{
-        AnalyzeRequest, ConvertRequest, LoadSettingsRequest, SaveSettingsRequest, analyze_vrm_ipc,
-        convert_vrm_to_gdb_ipc, load_project_settings_ipc, save_project_settings_ipc,
+        AnalyzeRequest, ConvertRequest, LoadSettingsRequest, PreviewRequest, SaveSettingsRequest,
+        analyze_vrm_ipc, build_preview_glb_ipc, convert_vrm_to_gdb_ipc, load_project_settings_ipc,
+        save_project_settings_ipc,
     },
     project::ProjectSettings,
     send_log_with_handle,
@@ -56,6 +57,23 @@ pub async fn convert_vrm_command(
     let result = convert_vrm_to_gdb_ipc(request);
     if result.is_ok() {
         send_log_with_handle(&app, LogLevel::Info, "Convert VRM completed");
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn build_preview_glb_command(
+    request: PreviewRequest,
+    app: AppHandle,
+) -> Result<String, String> {
+    send_log_with_handle(
+        &app,
+        LogLevel::Info,
+        &format!("Build preview GLB request: {}", request.input_path),
+    );
+    let result = build_preview_glb_ipc(request);
+    if result.is_ok() {
+        send_log_with_handle(&app, LogLevel::Info, "Build preview GLB completed");
     }
     result
 }

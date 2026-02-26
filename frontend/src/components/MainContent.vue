@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core';
-import { computed, ref } from 'vue';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import VrmPreview from '@/components/VrmPreview.vue';
 import { useFileSystem } from '@/composables/useFileSystem';
 import { useNotification } from '@/composables/useNotification';
 import { ValidationSeverity } from '@/types';
@@ -48,6 +50,9 @@ const analysis = ref<AnalysisReport | null>(null);
 const conversion = ref<ConversionReport | null>(null);
 const appVersion = ref('');
 const convertResultPath = ref('');
+const logs = ref<{ level: string; message: string; timestamp: string }[]>([]);
+
+let unlistenLogMessage: UnlistenFn | null = null;
 
 const outputMaxTextureDimension = computed(() => {
   if (!conversion.value || conversion.value.output_texture_infos.length === 0) {
@@ -56,6 +61,26 @@ const outputMaxTextureDimension = computed(() => {
   return conversion.value.output_texture_infos.reduce((max, texture) => {
     return Math.max(max, texture.width, texture.height);
   }, 0);
+});
+
+const outputTextureSizePreview = computed(() => {
+  if (!conversion.value) {
+    return '';
+  }
+  return conversion.value.output_texture_infos
+    .slice(0, 5)
+    .map(texture => `#${texture.index}: ${texture.width}x${texture.height}`)
+    .join(', ');
+});
+
+const resizedTextureCount = computed(() => {
+  if (!conversion.value) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    conversion.value.texture_over_1024_count - conversion.value.output_texture_over_1024_count
+  );
 });
 
 const hasBlockingIssue = computed(
@@ -194,14 +219,37 @@ const getVersion = async () => {
   }
 };
 
-// Get version on mount
-getVersion();
+onMounted(async () => {
+  await getVersion();
+  unlistenLogMessage = await listen<{ level: string; message: string; timestamp: string }>(
+    'log-message',
+    event => {
+      const payload = event.payload;
+      logs.value.push({
+        level: payload.level,
+        message: payload.message,
+        timestamp: payload.timestamp
+      });
+
+      if (logs.value.length > 200) {
+        logs.value.splice(0, logs.value.length - 200);
+      }
+    }
+  );
+});
+
+onBeforeUnmount(() => {
+  if (unlistenLogMessage) {
+    unlistenLogMessage();
+    unlistenLogMessage = null;
+  }
+});
 </script>
 
 <template>
   <v-container fluid>
-    <v-row>
-      <v-col cols="12">
+    <v-row align="start">
+      <v-col cols="12" lg="6">
         <v-card>
           <v-card-title class="text-h5">
             <v-icon icon="mdi-account-convert" class="mr-2" />
@@ -267,11 +315,11 @@ getVersion();
                   label="手動スケール"
                 />
               </v-col>
-              <v-col cols="12" md="4" class="d-flex align-center">
-                <v-switch
-                  v-model="options.texture_auto_resize"
-                  label="テクスチャ自動縮小(1024上限)"
-                />
+              <v-col cols="12" md="4" class="d-flex flex-column align-start">
+                <v-switch v-model="options.texture_auto_resize" label="1024px優先縮小" />
+                <div class="text-caption text-medium-emphasis mt-1">
+                  ON: 1025px以上→1024px / OFF: 2049px以上のみ→2048px
+                </div>
               </v-col>
             </v-row>
 
@@ -327,9 +375,46 @@ getVersion();
               変換済み: {{ convertResultPath }}
             </v-alert>
             <v-alert v-if="conversion" type="info" class="mt-2" variant="tonal">
-              変換後テクスチャ最大辺: {{ outputMaxTextureDimension }}px / 1024px超過:
+              変換後テクスチャ最大辺: {{ outputMaxTextureDimension }}px / 1024px超過(変換後):
               {{ conversion.output_texture_over_1024_count }}
+              <div class="text-caption mt-1">
+                現在の設定:
+                {{
+                  options.texture_auto_resize
+                    ? '1025px以上を1024pxへ縮小（2049px以上も1024px）'
+                    : '2049px以上のみ2048pxへ縮小（1025〜2048pxは維持）'
+                }}
+              </div>
             </v-alert>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" lg="6">
+        <vrm-preview :file-path="inputPath" :options="options" />
+      </v-col>
+    </v-row>
+
+    <v-row class="mt-4">
+      <v-col cols="12">
+        <v-card>
+          <v-card-title>
+            <v-icon icon="mdi-text-box-search-outline" class="mr-2" />
+            ログ
+          </v-card-title>
+          <v-card-text>
+            <div class="log-output" role="log" aria-live="polite">
+              <template v-if="logs.length > 0">
+                <div
+                  v-for="(entry, index) in logs"
+                  :key="`${entry.timestamp}-${index}`"
+                  class="log-line"
+                >
+                  [{{ entry.timestamp }}] [{{ entry.level.toUpperCase() }}] {{ entry.message }}
+                </div>
+              </template>
+              <div v-else class="text-medium-emphasis">ログはまだありません。</div>
+            </div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -385,6 +470,31 @@ getVersion();
                   }}%)
                 </v-list-item-title>
               </v-list-item>
+              <v-list-item>
+                <v-list-item-title>
+                  テクスチャ縮小ポリシー:
+                  {{
+                    options.texture_auto_resize
+                      ? '1025px以上→1024px（2049px以上を含む）'
+                      : '2049px以上のみ→2048px（1025〜2048pxは維持）'
+                  }}
+                </v-list-item-title>
+              </v-list-item>
+              <v-list-item v-if="conversion">
+                <v-list-item-title>
+                  変換後テクスチャ: {{ conversion.output_texture_infos.length }}枚 / 最大辺:
+                  {{ outputMaxTextureDimension }}px / 1024px超過:
+                  {{ conversion.output_texture_over_1024_count }}
+                </v-list-item-title>
+              </v-list-item>
+              <v-list-item v-if="conversion">
+                <v-list-item-title>
+                  縮小適用テクスチャ数(推定): {{ resizedTextureCount }}
+                  <span v-if="outputTextureSizePreview">
+                    / 縮小後サイズ例: {{ outputTextureSizePreview }}
+                  </span>
+                </v-list-item-title>
+              </v-list-item>
               <v-list-item v-for="issue in analysis.issues" :key="`${issue.code}-${issue.message}`">
                 <v-list-item-title>[{{ issue.severity }}] {{ issue.message }}</v-list-item-title>
               </v-list-item>
@@ -400,5 +510,17 @@ getVersion();
 <style scoped>
 .v-card-title {
   line-height: 1.3;
+}
+
+.log-output {
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line {
+  margin-bottom: 4px;
 }
 </style>

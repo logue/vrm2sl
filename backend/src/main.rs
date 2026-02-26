@@ -16,6 +16,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             command::analyze_vrm_command,
             command::convert_vrm_command,
+            command::build_preview_glb_command,
             command::save_project_settings_command,
             command::load_project_settings_command,
             command::get_app_version,
