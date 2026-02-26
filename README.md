@@ -5,12 +5,13 @@ VRM to SecondLife Avatar bone converter.
 ## Usage
 
 ```bash
-cargo run -- input.vrm output.gdb
+cargo run --manifest-path backend/Cargo.toml --bin vrm2sl -- input.vrm output.gdb
 ```
 
 or after install/build:
 
 ```bash
+cargo install --path backend --bin vrm2sl
 vrm2sl input.vrm output.gdb
 ```
 
@@ -50,7 +51,7 @@ UI層から直接呼び出せる入出力形式になっています。
 
 - Frontend: `frontend/`
 - Tauri backend: `backend/`
-- 既存Rustコア: `src/`（`vrm2sl` クレート）
+- Rustコア実装: `backend/src/`
 
 ### Desktop app run
 

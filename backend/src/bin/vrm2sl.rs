@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf, process};
 
 use anyhow::{Context, Result, bail};
-use vrm2sl::{
+use vrm2sl_tauri_lib::{
     convert::{ConvertOptions, analyze_vrm, convert_vrm_to_gdb},
     notify::send_desktop_notification,
     project::{ProjectSettings, load_project_settings, save_project_settings},

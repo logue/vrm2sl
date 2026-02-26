@@ -3,15 +3,16 @@
 //! This module contains all Tauri commands that can be invoked from the frontend.
 
 use tauri::AppHandle;
-use vrm2sl::{
+use vrm2sl_tauri_lib::{
+    LogLevel,
     convert::{AnalysisReport, ConversionReport},
     ipc::{
         AnalyzeRequest, ConvertRequest, LoadSettingsRequest, SaveSettingsRequest, analyze_vrm_ipc,
         convert_vrm_to_gdb_ipc, load_project_settings_ipc, save_project_settings_ipc,
     },
     project::ProjectSettings,
+    send_log_with_handle,
 };
-use vrm2sl_tauri_lib::{LogLevel, send_log_with_handle};
 
 #[tauri::command]
 pub async fn analyze_vrm_command(
