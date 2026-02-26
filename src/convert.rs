@@ -53,7 +53,7 @@ const BONE_MAP: [(&str, &str); 17] = [
     ("rightFoot", "mAnkleRight"),
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConvertOptions {
     pub target_height_cm: f32,
     pub manual_scale: f32,

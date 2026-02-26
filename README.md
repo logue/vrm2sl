@@ -20,6 +20,8 @@ vrm2sl input.vrm output.gdb
 vrm2sl input.vrm output.gdb --analyze-only --report report.json
 ```
 
+解析または変換が完了すると、デスクトップ通知を送信します（macOSでは `osascript` を利用）。
+
 ### Main options
 
 - `--target-height <cm>`: target avatar height (default `200`)
@@ -29,6 +31,18 @@ vrm2sl input.vrm output.gdb --analyze-only --report report.json
 - `--load-settings <project.json>`: load project settings
 - `--save-settings <project.json>`: save current project settings
 - `--report <report.json>`: save analysis report JSON
+
+## Tauri IPC integration layer
+
+Rust側でTauri `invoke` に接続しやすいIPC向け関数を公開しています。
+
+- `ipc::analyze_vrm_ipc`
+- `ipc::convert_vrm_to_gdb_ipc`
+- `ipc::save_project_settings_ipc`
+- `ipc::load_project_settings_ipc`
+
+それぞれ `String` パスとシリアライズ可能なリクエスト構造体を受け取り、
+UI層から直接呼び出せる入出力形式になっています。
 
 ## Implemented (core MVP baseline)
 

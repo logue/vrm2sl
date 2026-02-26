@@ -3,6 +3,7 @@ use std::{env, fs, path::PathBuf, process};
 use anyhow::{Context, Result, bail};
 use vrm2sl::{
     convert::{ConvertOptions, analyze_vrm, convert_vrm_to_gdb},
+    notify::send_desktop_notification,
     project::{ProjectSettings, load_project_settings, save_project_settings},
     texture::ResizeInterpolation,
 };
@@ -39,14 +40,18 @@ fn run() -> Result<()> {
     while index < args.len() {
         match args[index].as_str() {
             "--target-height" => {
-                let value = args.get(index + 1).context("--target-height requires a value")?;
+                let value = args
+                    .get(index + 1)
+                    .context("--target-height requires a value")?;
                 project_settings.target_height_cm = value
                     .parse::<f32>()
                     .with_context(|| format!("invalid --target-height: {value}"))?;
                 index += 2;
             }
             "--manual-scale" => {
-                let value = args.get(index + 1).context("--manual-scale requires a value")?;
+                let value = args
+                    .get(index + 1)
+                    .context("--manual-scale requires a value")?;
                 project_settings.manual_scale = value
                     .parse::<f32>()
                     .with_context(|| format!("invalid --manual-scale: {value}"))?;
@@ -110,16 +115,23 @@ fn run() -> Result<()> {
 
     if let Some(path) = report_path {
         let json = serde_json::to_string_pretty(&analysis).context("failed to serialize report")?;
-        fs::write(&path, json).with_context(|| format!("failed to write report: {}", path.display()))?;
+        fs::write(&path, json)
+            .with_context(|| format!("failed to write report: {}", path.display()))?;
     }
 
     if analyze_only {
         println!("Model: {}", analysis.model_name);
-        println!("Author: {}", analysis.author.unwrap_or_else(|| "Unknown".to_string()));
+        println!(
+            "Author: {}",
+            analysis.author.unwrap_or_else(|| "Unknown".to_string())
+        );
         println!("Estimated height: {:.2}cm", analysis.estimated_height_cm);
         println!(
             "Meshes: {}, Bones: {}, Vertices: {}, Polygons: {}",
-            analysis.mesh_count, analysis.bone_count, analysis.total_vertices, analysis.total_polygons
+            analysis.mesh_count,
+            analysis.bone_count,
+            analysis.total_vertices,
+            analysis.total_polygons
         );
         println!(
             "Texture fee estimate: {}L$ -> {}L$ ({}%)",
@@ -135,6 +147,7 @@ fn run() -> Result<()> {
         if let Some(path) = save_settings_path {
             save_project_settings(&path, &project_settings)?;
         }
+        let _ = send_desktop_notification("vrm2sl", "解析が完了しました");
         return Ok(());
     }
 
@@ -171,6 +184,8 @@ fn run() -> Result<()> {
     if let Some(path) = save_settings_path {
         save_project_settings(&path, &project_settings)?;
     }
+
+    let _ = send_desktop_notification("vrm2sl", "変換が完了しました");
 
     Ok(())
 }
