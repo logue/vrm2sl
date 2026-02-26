@@ -4,6 +4,13 @@ import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFileSystem } from '@/composables/useFileSystem';
 import { useNotification } from '@/composables/useNotification';
+import { ValidationSeverity } from '@/types/vrm2sl';
+import type {
+  AnalysisReport,
+  ConversionReport,
+  ConvertOptions,
+  ProjectSettings
+} from '@/types/vrm2sl';
 import { useGlobalStore } from '@/store';
 
 const { t } = useI18n();
@@ -11,72 +18,6 @@ const { t } = useI18n();
 const globalStore = useGlobalStore();
 const notification = useNotification(t);
 const fs = useFileSystem();
-
-interface ConvertOptions {
-  target_height_cm: number;
-  manual_scale: number;
-  texture_auto_resize: boolean;
-  texture_resize_method: 'Nearest' | 'Bilinear' | 'Bicubic' | 'Gaussian' | 'Lanczos3';
-}
-
-interface TextureInfo {
-  index: number;
-  width: number;
-  height: number;
-}
-
-interface UploadFeeEstimate {
-  before_linden_dollar: number;
-  after_resize_linden_dollar: number;
-  reduction_percent: number;
-}
-
-interface ValidationIssue {
-  severity: 'Error' | 'Warning' | 'Info';
-  code: string;
-  message: string;
-}
-
-interface AnalysisReport {
-  model_name: string;
-  author?: string;
-  estimated_height_cm: number;
-  bone_count: number;
-  mesh_count: number;
-  total_vertices: number;
-  total_polygons: number;
-  mapped_bones: [string, string][];
-  missing_required_bones: string[];
-  texture_infos: TextureInfo[];
-  fee_estimate: UploadFeeEstimate;
-  issues: ValidationIssue[];
-}
-
-interface ProjectSettings {
-  input_path?: string;
-  output_path?: string;
-  target_height_cm: number;
-  manual_scale: number;
-  texture_auto_resize: boolean;
-  texture_resize_method: ConvertOptions['texture_resize_method'];
-  face: {
-    blink: {
-      enabled: boolean;
-      interval_sec: number;
-      close_duration_sec: number;
-      wink_enabled: boolean;
-    };
-    lip_sync: { enabled: boolean; mode: string; open_angle: number; speed: number };
-    eye_tracking: {
-      camera_follow: boolean;
-      random_look: boolean;
-      vertical_range_deg: number;
-      horizontal_range_deg: number;
-      speed: number;
-    };
-  };
-  fingers: { enabled: boolean; test_pose: string };
-}
 
 const inputPath = ref('');
 const outputPath = ref('');
@@ -104,11 +45,21 @@ const face = ref<ProjectSettings['face']>({
 const fingers = ref<ProjectSettings['fingers']>({ enabled: true, test_pose: 'open' });
 
 const analysis = ref<AnalysisReport | null>(null);
+const conversion = ref<ConversionReport | null>(null);
 const appVersion = ref('');
 const convertResultPath = ref('');
 
+const outputMaxTextureDimension = computed(() => {
+  if (!conversion.value || conversion.value.output_texture_infos.length === 0) {
+    return 0;
+  }
+  return conversion.value.output_texture_infos.reduce((max, texture) => {
+    return Math.max(max, texture.width, texture.height);
+  }, 0);
+});
+
 const hasBlockingIssue = computed(
-  () => analysis.value?.issues.some(issue => issue.severity === 'Error') ?? false
+  () => analysis.value?.issues.some(issue => issue.severity === ValidationSeverity.Error) ?? false
 );
 
 const toProjectSettings = (): ProjectSettings => ({
@@ -161,6 +112,7 @@ const runAnalyze = async () => {
 
   globalStore.setLoading(true);
   try {
+    conversion.value = null;
     analysis.value = await invoke<AnalysisReport>('analyze_vrm_command', {
       request: {
         input_path: inputPath.value,
@@ -184,7 +136,7 @@ const runExport = async () => {
 
   globalStore.setLoading(true);
   try {
-    const result = await invoke<{ computed_scale_factor: number }>('convert_vrm_command', {
+    const result = await invoke<ConversionReport>('convert_vrm_command', {
       request: {
         input_path: inputPath.value,
         output_path: outputPath.value,
@@ -192,6 +144,7 @@ const runExport = async () => {
         notify_on_complete: true
       }
     });
+    conversion.value = result;
     convertResultPath.value = outputPath.value;
     notification.success(`変換完了 (scale=${result.computed_scale_factor.toFixed(4)})`);
   } catch (error) {
@@ -372,6 +325,10 @@ getVersion();
 
             <v-alert v-if="convertResultPath" type="success" class="mt-2" variant="tonal">
               変換済み: {{ convertResultPath }}
+            </v-alert>
+            <v-alert v-if="conversion" type="info" class="mt-2" variant="tonal">
+              変換後テクスチャ最大辺: {{ outputMaxTextureDimension }}px / 1024px超過:
+              {{ conversion.output_texture_over_1024_count }}
             </v-alert>
           </v-card-text>
         </v-card>

@@ -2,16 +2,18 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
+    io::Cursor,
     path::Path,
 };
 
 use anyhow::{Context, Result, bail};
 use gltf::{Document, Semantic, binary::Glb, import};
+use image::ImageFormat;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::texture::ResizeInterpolation;
+use crate::texture::{ResizeInterpolation, resize_texture_to_max};
 
 /// Required humanoid source bone names expected in VRoid/VRM input.
 const REQUIRED_BONES: [&str; 17] = [
@@ -143,6 +145,8 @@ pub struct ConversionReport {
     pub mapped_bones: Vec<(String, String)>,
     pub texture_count: usize,
     pub texture_over_1024_count: usize,
+    pub output_texture_infos: Vec<TextureInfo>,
+    pub output_texture_over_1024_count: usize,
     pub fee_estimate: UploadFeeEstimate,
     pub issues: Vec<ValidationIssue>,
 }
@@ -184,9 +188,10 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         });
     }
 
+    let humanoid_bone_nodes = extract_humanoid_bone_nodes(&input_json);
     let node_names = collect_node_names(&document);
-    let parent_map = collect_parent_map(&document);
-    let missing_required_bones = collect_missing_required_bones(&node_names);
+    let parent_index_map = collect_parent_index_map(&document);
+    let missing_required_bones = collect_missing_required_bones(&humanoid_bone_nodes);
 
     for missing in &missing_required_bones {
         issues.push(ValidationIssue {
@@ -196,7 +201,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         });
     }
 
-    issues.extend(validate_hierarchy(&node_names, &parent_map));
+    issues.extend(validate_hierarchy(&humanoid_bone_nodes, &parent_index_map));
 
     let (total_vertices, total_polygons, mut geometry_issues) = collect_mesh_statistics(&document);
     issues.append(&mut geometry_issues);
@@ -251,7 +256,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         mesh_count: document.meshes().count(),
         total_vertices,
         total_polygons,
-        mapped_bones: collect_mapped_bones(&node_names),
+        mapped_bones: collect_mapped_bones(&humanoid_bone_nodes),
         missing_required_bones,
         texture_infos,
         fee_estimate,
@@ -266,6 +271,8 @@ pub fn convert_vrm_to_gdb(
     options: ConvertOptions,
 ) -> Result<ConversionReport> {
     let analysis = analyze_vrm(input_path, options)?;
+    let input_json = parse_glb_json(input_path)?;
+    let humanoid_bone_nodes = extract_humanoid_bone_nodes(&input_json);
 
     if !analysis.missing_required_bones.is_empty() {
         bail!(
@@ -295,7 +302,20 @@ pub fn convert_vrm_to_gdb(
         options.manual_scale
     };
 
-    transform_and_write_glb(input_path, output_path, computed_scale_factor)?;
+    transform_and_write_glb(
+        input_path,
+        output_path,
+        computed_scale_factor,
+        &humanoid_bone_nodes,
+        options.texture_auto_resize,
+        options.texture_resize_method,
+    )?;
+
+    let output_texture_infos = collect_output_texture_infos(output_path)?;
+    let output_texture_over_1024_count = output_texture_infos
+        .iter()
+        .filter(|image| image.width > 1024 || image.height > 1024)
+        .count();
 
     let texture_over_1024_count = analysis
         .texture_infos
@@ -316,9 +336,36 @@ pub fn convert_vrm_to_gdb(
         mapped_bones: analysis.mapped_bones,
         texture_count: analysis.texture_infos.len(),
         texture_over_1024_count,
+        output_texture_infos,
+        output_texture_over_1024_count,
         fee_estimate: analysis.fee_estimate,
         issues: analysis.issues,
     })
+}
+
+/// Collect texture dimensions from an exported GLB/GDB output file.
+fn collect_output_texture_infos(output_path: &Path) -> Result<Vec<TextureInfo>> {
+    let (_, _, images) = import(output_path)
+        .with_context(|| format!("failed to read output VRM/glTF: {}", output_path.display()))?;
+
+    Ok(images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| TextureInfo {
+            index,
+            width: image.width,
+            height: image.height,
+        })
+        .collect())
+}
+
+/// Parse and return the JSON chunk from a GLB/VRM file.
+fn parse_glb_json(input_path: &Path) -> Result<Value> {
+    let input_bytes = fs::read(input_path)
+        .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
+    let input_glb = Glb::from_slice(&input_bytes).context("input VRM is not a GLB container")?;
+    serde_json::from_slice(input_glb.json.as_ref())
+        .context("failed to parse glTF JSON chunk from VRM")
 }
 
 /// Validate that the source appears to be a supported VRoid/VRM model.
@@ -358,17 +405,11 @@ fn collect_node_names(document: &Document) -> HashSet<String> {
 }
 
 /// Build a child->parent node-name map for hierarchy validation.
-fn collect_parent_map(document: &Document) -> HashMap<String, String> {
+fn collect_parent_index_map(document: &Document) -> HashMap<usize, usize> {
     let mut parent_map = HashMap::new();
     for parent in document.nodes() {
-        let Some(parent_name) = parent.name() else {
-            continue;
-        };
-
         for child in parent.children() {
-            if let Some(child_name) = child.name() {
-                parent_map.insert(child_name.to_string(), parent_name.to_string());
-            }
+            parent_map.insert(child.index(), parent.index());
         }
     }
 
@@ -376,27 +417,30 @@ fn collect_parent_map(document: &Document) -> HashMap<String, String> {
 }
 
 /// Return missing required bones from the source node-name set.
-fn collect_missing_required_bones(node_names: &HashSet<String>) -> Vec<String> {
+fn collect_missing_required_bones(humanoid_bone_nodes: &HashMap<String, usize>) -> Vec<String> {
     REQUIRED_BONES
         .iter()
-        .filter(|bone_name| !node_names.contains(**bone_name))
+        .filter(|bone_name| !humanoid_bone_nodes.contains_key(**bone_name))
         .map(|bone_name| bone_name.to_string())
         .collect()
 }
 
 /// Validate required humanoid hierarchy relationships.
 fn validate_hierarchy(
-    node_names: &HashSet<String>,
-    parent_map: &HashMap<String, String>,
+    humanoid_bone_nodes: &HashMap<String, usize>,
+    parent_map: &HashMap<usize, usize>,
 ) -> Vec<ValidationIssue> {
     REQUIRED_PARENT_RELATIONS
         .iter()
         .filter_map(|(parent, child)| {
-            if !node_names.contains(*parent) || !node_names.contains(*child) {
+            let Some(parent_index) = humanoid_bone_nodes.get(*parent).copied() else {
                 return None;
-            }
+            };
+            let Some(child_index) = humanoid_bone_nodes.get(*child).copied() else {
+                return None;
+            };
 
-            let Some(actual_parent) = parent_map.get(*child) else {
+            let Some(actual_parent_index) = parent_map.get(&child_index).copied() else {
                 return Some(ValidationIssue {
                     severity: Severity::Error,
                     code: "INVALID_BONE_HIERARCHY".to_string(),
@@ -407,13 +451,23 @@ fn validate_hierarchy(
                 });
             };
 
-            if actual_parent != parent {
+            let is_valid_parent = if *parent == "chest" && *child == "neck" {
+                let upper_chest_index = humanoid_bone_nodes.get("upperChest").copied();
+                actual_parent_index == parent_index
+                    || upper_chest_index
+                        .map(|index| index == actual_parent_index)
+                        .unwrap_or(false)
+            } else {
+                actual_parent_index == parent_index
+            };
+
+            if !is_valid_parent {
                 return Some(ValidationIssue {
                     severity: Severity::Error,
                     code: "INVALID_BONE_HIERARCHY".to_string(),
                     message: format!(
-                        "[ERROR] Non-standard bone hierarchy: '{}' parent is '{}' (expected '{}')",
-                        child, parent, actual_parent
+                        "[ERROR] Non-standard bone hierarchy: '{}' parent index is {} (expected {})",
+                        child, actual_parent_index, parent_index
                     ),
                 });
             }
@@ -510,10 +564,10 @@ fn fee_per_texture(width: u32, height: u32) -> u32 {
 }
 
 /// Return mapped source->target bone pairs present in the input model.
-fn collect_mapped_bones(node_names: &HashSet<String>) -> Vec<(String, String)> {
+fn collect_mapped_bones(humanoid_bone_nodes: &HashMap<String, usize>) -> Vec<(String, String)> {
     BONE_MAP
         .iter()
-        .filter(|(source, _)| node_names.contains(*source))
+        .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
         .map(|(source, target)| (source.to_string(), target.to_string()))
         .collect()
 }
@@ -543,18 +597,31 @@ fn estimate_height_cm(document: &Document, buffers: &[gltf::buffer::Data]) -> Op
 }
 
 /// Apply transforms/cleanup and write the final GLB/GDB output.
-fn transform_and_write_glb(input_path: &Path, output_path: &Path, scale_factor: f32) -> Result<()> {
+fn transform_and_write_glb(
+    input_path: &Path,
+    output_path: &Path,
+    scale_factor: f32,
+    humanoid_bone_nodes: &HashMap<String, usize>,
+    texture_auto_resize: bool,
+    texture_resize_method: ResizeInterpolation,
+) -> Result<()> {
     let bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
     let glb = Glb::from_slice(&bytes).context("input VRM is not a GLB container")?;
 
     let mut json: Value = serde_json::from_slice(glb.json.as_ref())
         .context("failed to parse glTF JSON chunk from VRM")?;
+    let had_bin = glb.bin.is_some();
+    let mut bin = glb.bin.map(|chunk| chunk.into_owned()).unwrap_or_default();
 
-    rename_bones(&mut json);
+    rename_bones(&mut json, humanoid_bone_nodes);
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
     apply_uniform_scale_to_scene_roots(&mut json, scale_factor);
+
+    if texture_auto_resize {
+        apply_texture_resize_to_embedded_images(&mut json, &mut bin, texture_resize_method)?;
+    }
 
     let json_bytes =
         serde_json::to_vec(&json).context("failed to serialize transformed glTF JSON")?;
@@ -562,7 +629,11 @@ fn transform_and_write_glb(input_path: &Path, output_path: &Path, scale_factor: 
     let transformed = Glb {
         header: glb.header,
         json: Cow::Owned(json_bytes),
-        bin: glb.bin,
+        bin: if had_bin || !bin.is_empty() {
+            Some(Cow::Owned(bin))
+        } else {
+            None
+        },
     };
 
     let mut out = Vec::new();
@@ -576,19 +647,169 @@ fn transform_and_write_glb(input_path: &Path, output_path: &Path, scale_factor: 
     Ok(())
 }
 
-/// Rename known bones according to the mapping table.
-fn rename_bones(json: &mut Value) {
-    let map: HashMap<&str, &str> = BONE_MAP.into_iter().collect();
+/// Resize embedded image buffer views when textures exceed 1024x1024.
+fn apply_texture_resize_to_embedded_images(
+    json: &mut Value,
+    bin: &mut Vec<u8>,
+    interpolation: ResizeInterpolation,
+) -> Result<()> {
+    let Some(buffer_views) = json.get("bufferViews").and_then(Value::as_array) else {
+        return Ok(());
+    };
 
+    let mut segments = Vec::<Vec<u8>>::with_capacity(buffer_views.len());
+    for view in buffer_views {
+        let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let length = view.get("byteLength").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let end = offset.saturating_add(length);
+        if end <= bin.len() {
+            segments.push(bin[offset..end].to_vec());
+        } else {
+            segments.push(Vec::new());
+        }
+    }
+
+    if let Some(images) = json.get_mut("images").and_then(Value::as_array_mut) {
+        for image in images {
+            let Some(view_index) = image
+                .get("bufferView")
+                .and_then(Value::as_u64)
+                .map(|index| index as usize)
+            else {
+                continue;
+            };
+
+            let Some(image_bytes) = segments.get_mut(view_index) else {
+                continue;
+            };
+
+            let mime_type = image
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .unwrap_or("image/png");
+            let image_format = match mime_type {
+                "image/png" => Some(ImageFormat::Png),
+                "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+                _ => None,
+            };
+
+            let Some(image_format) = image_format else {
+                continue;
+            };
+
+            let decoded = image::load_from_memory(image_bytes)
+                .with_context(|| format!("failed to decode embedded texture view {view_index}"))?;
+
+            if decoded.width() <= 1024 && decoded.height() <= 1024 {
+                continue;
+            }
+
+            let resized = resize_texture_to_max(&decoded, 1024, 1024, interpolation);
+            let mut encoded = Vec::<u8>::new();
+            resized
+                .write_to(&mut Cursor::new(&mut encoded), image_format)
+                .with_context(|| {
+                    format!(
+                        "failed to encode resized embedded texture view {} as {}",
+                        view_index, mime_type
+                    )
+                })?;
+
+            *image_bytes = encoded;
+            image["mimeType"] = Value::String(match image_format {
+                ImageFormat::Png => "image/png".to_string(),
+                ImageFormat::Jpeg => "image/jpeg".to_string(),
+                _ => mime_type.to_string(),
+            });
+        }
+    }
+
+    let mut rebuilt = Vec::<u8>::new();
+    let mut offsets = Vec::<usize>::with_capacity(segments.len());
+    for mut chunk in segments {
+        while rebuilt.len() % 4 != 0 {
+            rebuilt.push(0);
+        }
+        offsets.push(rebuilt.len());
+        rebuilt.append(&mut chunk);
+    }
+
+    if let Some(buffer_views_mut) = json.get_mut("bufferViews").and_then(Value::as_array_mut) {
+        for (index, view) in buffer_views_mut.iter_mut().enumerate() {
+            if let Some(offset) = offsets.get(index).copied() {
+                let length = rebuilt.len().saturating_sub(offset);
+                let next_offset = offsets.get(index + 1).copied().unwrap_or(rebuilt.len());
+                let byte_length = next_offset.saturating_sub(offset);
+                view["byteOffset"] = Value::from(offset as u64);
+                view["byteLength"] = Value::from(byte_length as u64);
+                let _ = length;
+            }
+        }
+    }
+
+    if let Some(buffers) = json.get_mut("buffers").and_then(Value::as_array_mut) {
+        if let Some(first_buffer) = buffers.first_mut() {
+            first_buffer["byteLength"] = Value::from(rebuilt.len() as u64);
+        }
+    }
+
+    *bin = rebuilt;
+    Ok(())
+}
+
+/// Rename known bones according to the mapping table.
+fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
     if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
-        for node in nodes {
-            if let Some(current_name) = node.get("name").and_then(Value::as_str) {
-                if let Some(new_name) = map.get(current_name) {
-                    node["name"] = Value::String((*new_name).to_string());
+        for (source, target) in BONE_MAP {
+            if let Some(node_index) = humanoid_bone_nodes.get(source).copied() {
+                if let Some(node) = nodes.get_mut(node_index) {
+                    node["name"] = Value::String(target.to_string());
                 }
             }
         }
     }
+}
+
+/// Extract humanoid-bone semantic to node-index mapping from VRM extensions.
+fn extract_humanoid_bone_nodes(json: &Value) -> HashMap<String, usize> {
+    let mut mapping = HashMap::<String, usize>::new();
+
+    if let Some(vrmc_humanoid) = json
+        .pointer("/extensions/VRMC_vrm/humanoid/humanBones")
+        .and_then(Value::as_object)
+    {
+        for (bone_name, value) in vrmc_humanoid {
+            if let Some(node_index) = value
+                .get("node")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+            {
+                mapping.insert(bone_name.clone(), node_index);
+            }
+        }
+    }
+
+    if let Some(vrm_humanoid) = json
+        .pointer("/extensions/VRM/humanoid/humanBones")
+        .and_then(Value::as_array)
+    {
+        for value in vrm_humanoid {
+            let bone_name = value
+                .get("bone")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let node_index = value
+                .get("node")
+                .and_then(Value::as_u64)
+                .map(|node| node as usize);
+
+            if let (Some(bone_name), Some(node_index)) = (bone_name, node_index) {
+                mapping.entry(bone_name).or_insert(node_index);
+            }
+        }
+    }
+
+    mapping
 }
 
 /// Remove VRM-specific extensions and recursive extras fields.
@@ -762,20 +983,43 @@ mod tests {
 
     #[test]
     fn given_required_hierarchy_when_parent_mismatch_then_error_is_reported() {
-        let node_names = ["hips", "spine", "chest"]
+        let humanoid_bone_nodes = ["hips", "spine", "chest"]
             .iter()
-            .map(|name| name.to_string())
-            .collect::<HashSet<String>>();
+            .enumerate()
+            .map(|(index, name)| (name.to_string(), index))
+            .collect::<HashMap<String, usize>>();
 
-        let mut parent_map = HashMap::new();
-        parent_map.insert("spine".to_string(), "hips".to_string());
-        parent_map.insert("chest".to_string(), "hips".to_string());
+        let mut parent_map = HashMap::<usize, usize>::new();
+        parent_map.insert(1, 0);
+        parent_map.insert(2, 0);
 
-        let issues = validate_hierarchy(&node_names, &parent_map);
+        let issues = validate_hierarchy(&humanoid_bone_nodes, &parent_map);
         assert!(
             issues
                 .iter()
                 .any(|issue| issue.code == "INVALID_BONE_HIERARCHY")
         );
+    }
+
+    #[test]
+    fn given_vrmc_humanoid_when_extracting_bones_then_required_bones_are_found() {
+        let input_json = serde_json::json!({
+            "extensions": {
+                "VRMC_vrm": {
+                    "humanoid": {
+                        "humanBones": {
+                            "hips": {"node": 1},
+                            "spine": {"node": 2},
+                            "chest": {"node": 3}
+                        }
+                    }
+                }
+            }
+        });
+
+        let mapping = extract_humanoid_bone_nodes(&input_json);
+        assert_eq!(mapping.get("hips"), Some(&1usize));
+        assert_eq!(mapping.get("spine"), Some(&2usize));
+        assert_eq!(mapping.get("chest"), Some(&3usize));
     }
 }
