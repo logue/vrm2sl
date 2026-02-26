@@ -10,7 +10,7 @@ VRoidで作成したVRMファイルを、Second Life で使用可能なリグ付
 - 揺れボーン（髪・尻尾・耳・服物理）無視
 - 胸揺れ・尻揺れはSecond Lifeのシェイプ仕様依存のため非対応
 - 表情（BlendShape）無視
-- アニメーション無視
+- アニメーションは出力データには含めない（プレビュー再生テスト基盤はv0.8で実装）
 - Bento拡張ボーンは、目、まぶた、口、指のみ対応
 - シェイプ追従非対応
 - Fitted Mesh非対応
@@ -18,6 +18,15 @@ VRoidで作成したVRMファイルを、Second Life で使用可能なリグ付
 - **現時点ではVRoid Studio標準出力のVRMのみ対応**
 
 ## 🗺️ ロードマップ
+
+### v0.8（先行実装）：アニメーション基盤
+
+変換処理より先に、Second Life内部アニメーションの配置・読込・再生テスト基盤を実装する。
+
+- BVHアニメーションデータを `frontend/public/animations/` に配置
+- three.js `BVHLoader` による直接読込を実装
+- プレビューでの再生テスト（walk / stand など）
+- CC BY 3.0に基づく著作権表記の明記
 
 ### v1.0（次のバージョン）：尾・耳・羽の動作実装
 
@@ -339,8 +348,8 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 - 指ポーズ再生
 - 顔アニメテスト再生
 
-**アニメーションソース：** Second Life公式ビューアリポジトリから自動ダウンロード  
-**形式変換：** Second Life標準形式 → three.js互換形式に自動変換
+**アニメーションソース：** Second Life提供BVH（`bvh_files.zip`）を `frontend/public/animations/` に静的配置（プレビュー用）  
+**読込方式：** `BVHLoader` によるBVH直接読込（事前変換不要）
 
 ### 7️⃣ エクスポート設定
 
@@ -410,6 +419,20 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 
 ### 📌 残件（マイルストーン別）
 
+#### v0.8（先行：アニメーション基盤）
+
+- [x] 変換対象アニメーションを確定（walk / stand / sit / turn など）
+- [x] BVH入力セットを取得（`frontend/public/animations/` に配置済み・120ファイル）
+- [x] アセット配置方針を決定：BVH を `public/animations/` に静的配置、`BVHLoader` で直接読込
+- [ ] 再生対象BVHをリストアップし、カテゴリ分けする（stand/walk/sit/dance など）
+- [ ] `VrmPreview.vue` に `BVHLoader` を組み込みアニメーション再生を実装
+- [ ] プレビューに再生UIを追加（選択・再生・停止・ループ）
+- [ ] 再生テストを実施（walk / stand / sit の連続再生確認）
+- [ ] ボーン名マッピング確認（SL BVH骨格 ↔ VRM/GLB骨格）
+- [ ] 失敗時フォールバック挙動を実装（未読込時メッセージ表示）
+- [x] 同梱配布する場合の著作権表記テンプレート整備
+- [x] 同梱配布可否のライセンス最終確認（CC BY 3.0）
+
 #### v0.9（コア変換の完成）
 
 - [ ] Aポーズ→Tポーズ補正の本実装（上腕回転補正＋頂点逆補正）
@@ -423,7 +446,6 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 
 - [ ] 尾・耳・羽の動作対応
 - [ ] プレビューの追加操作（グリッド/ライト/ワイヤーフレーム切替）
-- [ ] アニメーション自動取得・形式変換・再生テスト機能
 
 #### v1.1（その次のバージョン）
 
@@ -474,44 +496,49 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 
 **ライセンス制約**
 
-アニメーションファイルはSecond Life公式ビューアのライセンス上の理由により、パッケージに同梱できません。
+アニメーションデータは CC BY 3.0 に基づき、著作権表記を付与したうえで本ツールのプレビュー用アセットとして配置・利用する。
 
-**アニメーション取得方法**
+**ライセンス表記（配布時）**
 
-1. **ソース：** Second Life公式ビューアリポジトリ
-   - 公式ビューアから標準アニメーション（walk, stand, sit等）を取得
-   - ダウンロードはアプリ初回実行時、またはアニメーション再生時に自動実行
+Contains animation data © Linden Research, Inc.  
+Licensed under CC BY 3.0  
+https://creativecommons.org/licenses/by/3.0/  
+Modified for use in this tool.
 
-2. **キャッシング**
-   - ダウンロードしたアニメーションはローカルキャッシュに保存
-   - 次回実行時はネットワークアクセスなしで即座に利用可能
+**アニメーション準備方法**
 
-**形式変換**
+1. **ソース：** `https://static-secondlife-com.s3.amazonaws.com/downloads/avatar/bvh_files.zip`
+2. **配置：** 解凍したBVHファイルを `frontend/public/animations/` に配置（**配置済み・120ファイル**）
+3. **再生：** three.js の `BVHLoader` を使い、変換不要でそのまま読み込み可能
+4. **アクセス：** `fetch('/animations/xxx.bvh')` または `BVHLoader.load('/animations/xxx.bvh', ...)` でOK
 
-Second Lifeのアニメーション形式（.anim等、BVH互換）は、three.jsでは直接再生できません。以下の処理が必要：
+**形式について**
 
-- **入力形式：** BVH形式またはSecond Life標準形式
-- **変換処理：** glTF 2.0 Animation形式へ変換
-- **ツール：** 既存のBVH→glTF変換ライブラリ利用、または自作変換スクリプト
-- **出力形式：** glTFアニメーション（Keyframe Track化）
+three.js には `three/examples/jsm/loaders/BVHLoader.js` が付属しており、BVH を `AnimationClip` として直接読み込めます。  
+事前変換（BVH → glTF）は不要です。
+
+- **入力形式：** BVH形式（Second Life標準）
+- **ローダー：** `BVHLoader`（three.js 同梱）
+- **出力：** `{ clip: AnimationClip, skeleton: Skeleton }` → `AnimationMixer` で再生
+- **glTF出力：** アニメーションは埋め込まない（Second Life ではglTFアニメーションは無視されるため）
 
 **実装の流れ**
 
 ```
-1. 公式ビューアリポジトリからアニメーションダウンロード
+1. frontend/public/animations/*.bvh を配置（済み）
    ↓
-2. キャッシュディレクトリに保存
+2. VrmPreview.vue に BVHLoader を import
    ↓
-3. BVH→glTFアニメーション変換
+3. AnimationMixer + BVHLoader.load() でアニメーション再生
    ↓
-4. three.jsのMixer/AnimationClipで再生テスト
+4. 再生UI（ドロップダウン選択 → 再生/停止）を追加
 ```
 
 **注意点**
 
-- ネットワークエラー時の自動リトライ機能
-- ダウンロード進捗表示
-- キャッシュサイズ管理（不要な古いアニメーションの削除機能）
+- SL BVHのボーン名（mHipなど）とVRM/GLBのボーン名が異なるため、再生前にボーン名マッピングが必要
+- `public/` 配下はViteビルドでそのままコピーされるためTauriでも `fetch('/animations/...')` でアクセス可能
+- アップデート時はBVHファイルをそのまま差し替えるだけでよい
 
 ### テクスチャ処理戦略
 
@@ -590,7 +617,7 @@ vrm2sl input.vrm output.gdb
 - 揺れ物
 - 胸揺れ・尻揺れ（Second Lifeシェイプ依存のため）
 - Fitted Mesh
-- モーション・アニメーション（出力は対応しない）
+- モーション・アニメーションのglTF出力埋め込み（Second Life側で無視されるため非対応）
 - シェイプ連動
 
 ### 🎯 成功条件

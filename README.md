@@ -90,6 +90,16 @@ UIの `MainContent` から以下を実行できます。
 - Texture auto-resize currently affects validation/estimation and option handling; embedded image payload rewrite is not yet enabled.
 - Full hierarchy reconstruction, inverse-bind full regeneration/writeback, and advanced UI/preview workflow are planned next steps.
 
+## Animation Attribution
+
+Contains animation data © Linden Research, Inc.  
+Licensed under CC BY 3.0  
+https://creativecommons.org/licenses/by/3.0/
+
+Modified for use in this tool.
+
+Frontend-side asset note: see [frontend/README.md](frontend/README.md).
+
 See [Contributing](CONTRIBUTING.md) for development and coding conventions.
 
 ## Testing

@@ -37,6 +37,22 @@ const PROJECT_SITE = import.meta.env.VITE_PROJECT_SITE || 'https://yourdomain.co
               {{ PROJECT_SITE }}
             </a>
           </p>
+          <p class="text-left text-caption mt-4">
+            Contains animation data © Linden Research, Inc.
+            <br />
+            Licensed under CC BY 3.0
+            <br />
+            <a
+              href="https://creativecommons.org/licenses/by/3.0/"
+              target="_blank"
+              @click.prevent="openUrl('https://creativecommons.org/licenses/by/3.0/')"
+            >
+              https://creativecommons.org/licenses/by/3.0/
+            </a>
+            <br />
+            <br />
+            Modified for use in this tool.
+          </p>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
