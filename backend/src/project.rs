@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::texture::ResizeInterpolation;
 
+/// Blink behavior settings used by lightweight face controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlinkSettings {
     pub enabled: bool,
@@ -24,6 +25,7 @@ impl Default for BlinkSettings {
     }
 }
 
+/// Lip-sync behavior settings used by lightweight face controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LipSyncSettings {
     pub enabled: bool,
@@ -43,6 +45,7 @@ impl Default for LipSyncSettings {
     }
 }
 
+/// Eye-tracking behavior settings for preview/control configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EyeTrackingSettings {
     pub camera_follow: bool,
@@ -64,6 +67,7 @@ impl Default for EyeTrackingSettings {
     }
 }
 
+/// Grouped face control settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaceSettings {
     pub blink: BlinkSettings,
@@ -81,6 +85,7 @@ impl Default for FaceSettings {
     }
 }
 
+/// Finger test/control settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FingerSettings {
     pub enabled: bool,
@@ -96,6 +101,7 @@ impl Default for FingerSettings {
     }
 }
 
+/// Persisted project settings used by CLI/UI workflows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSettings {
     pub input_path: Option<String>,
@@ -123,6 +129,7 @@ impl Default for ProjectSettings {
     }
 }
 
+/// Save project settings to a JSON file.
 pub fn save_project_settings(path: &Path, settings: &ProjectSettings) -> Result<()> {
     let content = serde_json::to_string_pretty(settings)
         .context("failed to serialize project settings as JSON")?;
@@ -131,6 +138,7 @@ pub fn save_project_settings(path: &Path, settings: &ProjectSettings) -> Result<
     Ok(())
 }
 
+/// Load project settings from a JSON file.
 pub fn load_project_settings(path: &Path) -> Result<ProjectSettings> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to load project settings: {}", path.display()))?;

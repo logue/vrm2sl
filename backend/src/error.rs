@@ -18,7 +18,7 @@ pub enum AppError {
     General(String),
 }
 
-/// Tauriコマンドは String を返す必要があるため、変換を実装
+/// Tauri commands return `String` errors, so convert `AppError` accordingly.
 impl From<AppError> for String {
     fn from(error: AppError) -> Self {
         error.to_string()

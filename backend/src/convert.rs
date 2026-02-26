@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::texture::ResizeInterpolation;
 
+/// Required humanoid source bone names expected in VRoid/VRM input.
 const REQUIRED_BONES: [&str; 17] = [
     "hips",
     "spine",
@@ -33,6 +34,7 @@ const REQUIRED_BONES: [&str; 17] = [
     "rightFoot",
 ];
 
+/// Core VRM-to-Second Life bone mapping table.
 const BONE_MAP: [(&str, &str); 17] = [
     ("hips", "mPelvis"),
     ("spine", "mTorso"),
@@ -53,11 +55,16 @@ const BONE_MAP: [(&str, &str); 17] = [
     ("rightFoot", "mAnkleRight"),
 ];
 
+/// Conversion options shared by CLI and Tauri IPC entry points.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConvertOptions {
+    /// Target avatar height in centimeters.
     pub target_height_cm: f32,
+    /// Additional manual scale multiplier.
     pub manual_scale: f32,
+    /// Enables automatic texture downscaling checks/policy.
     pub texture_auto_resize: bool,
+    /// Interpolation method used for texture resize operations.
     pub texture_resize_method: ResizeInterpolation,
 }
 
@@ -72,6 +79,7 @@ impl Default for ConvertOptions {
     }
 }
 
+/// Severity level used by validation issues.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -79,6 +87,7 @@ pub enum Severity {
     Info,
 }
 
+/// A single validation issue produced during analysis/conversion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationIssue {
     pub severity: Severity,
@@ -86,6 +95,7 @@ pub struct ValidationIssue {
     pub message: String,
 }
 
+/// Texture metadata used in validation and upload cost estimation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextureInfo {
     pub index: usize,
@@ -93,6 +103,7 @@ pub struct TextureInfo {
     pub height: u32,
 }
 
+/// Lightweight upload fee estimate before and after resize policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadFeeEstimate {
     pub before_linden_dollar: u32,
@@ -100,6 +111,7 @@ pub struct UploadFeeEstimate {
     pub reduction_percent: u32,
 }
 
+/// Analysis-only report generated without writing output files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
     pub model_name: String,
@@ -116,6 +128,7 @@ pub struct AnalysisReport {
     pub issues: Vec<ValidationIssue>,
 }
 
+/// Full conversion report returned after export.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversionReport {
     pub model_name: String,
@@ -134,6 +147,7 @@ pub struct ConversionReport {
     pub issues: Vec<ValidationIssue>,
 }
 
+/// Required parent-child relationships used for hierarchy validation.
 const REQUIRED_PARENT_RELATIONS: [(&str, &str); 12] = [
     ("hips", "spine"),
     ("spine", "chest"),
@@ -149,6 +163,7 @@ const REQUIRED_PARENT_RELATIONS: [(&str, &str); 12] = [
     ("rightLowerLeg", "rightFoot"),
 ];
 
+/// Analyze a VRM/GLB file and return validation + diagnostic information.
 pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<AnalysisReport> {
     let input_bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
@@ -177,7 +192,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         issues.push(ValidationIssue {
             severity: Severity::Error,
             code: "MISSING_REQUIRED_BONE".to_string(),
-            message: format!("[ERROR] 必須ボーン {} が見つかりません", missing),
+            message: format!("[ERROR] Required bone '{}' was not found", missing),
         });
     }
 
@@ -211,12 +226,12 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
             code: "TEXTURE_OVERSIZE".to_string(),
             message: if options.texture_auto_resize {
                 format!(
-                    "⚠️ テクスチャサイズ超過 {} 枚を検出。エクスポート時に1024px上限へ縮小予定です",
+                    "⚠️ Detected {} oversized texture(s). They will be resized to a 1024px max on export",
                     oversized_count
                 )
             } else {
                 format!(
-                    "⚠️ テクスチャサイズ超過 {} 枚を検出。Second Lifeアップロード費用増加の可能性があります",
+                    "⚠️ Detected {} oversized texture(s). Second Life upload cost may increase",
                     oversized_count
                 )
             },
@@ -244,6 +259,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
     })
 }
 
+/// Convert a VRM file to Second Life-oriented `.gdb` output.
 pub fn convert_vrm_to_gdb(
     input_path: &Path,
     output_path: &Path,
@@ -253,7 +269,7 @@ pub fn convert_vrm_to_gdb(
 
     if !analysis.missing_required_bones.is_empty() {
         bail!(
-            "[ERROR] 必須ボーン不足: {}",
+            "[ERROR] Missing required bones: {}",
             analysis.missing_required_bones.join(", ")
         );
     }
@@ -305,6 +321,7 @@ pub fn convert_vrm_to_gdb(
     })
 }
 
+/// Validate that the source appears to be a supported VRoid/VRM model.
 fn validate_vroid_model(json: &Value) -> Result<()> {
     let generator = json
         .get("asset")
@@ -329,9 +346,10 @@ fn validate_vroid_model(json: &Value) -> Result<()> {
         return Ok(());
     }
 
-    bail!("[ERROR] VRoid Studio標準のVRMのみサポートしています")
+    bail!("[ERROR] Only standard VRoid Studio VRM files are supported")
 }
 
+/// Collect all named node identifiers from the source document.
 fn collect_node_names(document: &Document) -> HashSet<String> {
     document
         .nodes()
@@ -339,6 +357,7 @@ fn collect_node_names(document: &Document) -> HashSet<String> {
         .collect()
 }
 
+/// Build a child->parent node-name map for hierarchy validation.
 fn collect_parent_map(document: &Document) -> HashMap<String, String> {
     let mut parent_map = HashMap::new();
     for parent in document.nodes() {
@@ -356,6 +375,7 @@ fn collect_parent_map(document: &Document) -> HashMap<String, String> {
     parent_map
 }
 
+/// Return missing required bones from the source node-name set.
 fn collect_missing_required_bones(node_names: &HashSet<String>) -> Vec<String> {
     REQUIRED_BONES
         .iter()
@@ -364,6 +384,7 @@ fn collect_missing_required_bones(node_names: &HashSet<String>) -> Vec<String> {
         .collect()
 }
 
+/// Validate required humanoid hierarchy relationships.
 fn validate_hierarchy(
     node_names: &HashSet<String>,
     parent_map: &HashMap<String, String>,
@@ -379,7 +400,10 @@ fn validate_hierarchy(
                 return Some(ValidationIssue {
                     severity: Severity::Error,
                     code: "INVALID_BONE_HIERARCHY".to_string(),
-                    message: format!("[ERROR] 非標準的なボーン階層です: {} の親が未設定", child),
+                    message: format!(
+                        "[ERROR] Non-standard bone hierarchy: parent for '{}' is not set",
+                        child
+                    ),
                 });
             };
 
@@ -388,7 +412,7 @@ fn validate_hierarchy(
                     severity: Severity::Error,
                     code: "INVALID_BONE_HIERARCHY".to_string(),
                     message: format!(
-                        "[ERROR] 非標準的なボーン階層です: {} の親が {} ではなく {} です",
+                        "[ERROR] Non-standard bone hierarchy: '{}' parent is '{}' (expected '{}')",
                         child, parent, actual_parent
                     ),
                 });
@@ -399,6 +423,7 @@ fn validate_hierarchy(
         .collect()
 }
 
+/// Collect total mesh statistics and hard-limit validation issues.
 fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<ValidationIssue>) {
     let mut total_vertices = 0usize;
     let mut total_polygons = 0usize;
@@ -419,7 +444,7 @@ fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<Validation
                     severity: Severity::Error,
                     code: "VERTEX_LIMIT_EXCEEDED".to_string(),
                     message: format!(
-                        "⛔ 頂点数オーバー（メッシュ: {}, primitive: {}, 現在: {} / 上限: 65535）",
+                        "⛔ Vertex limit exceeded (mesh: {}, primitive: {}, current: {} / limit: 65535)",
                         mesh_name, primitive_index, vertex_count
                     ),
                 });
@@ -441,6 +466,7 @@ fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<Validation
     (total_vertices, total_polygons, issues)
 }
 
+/// Estimate texture upload fees before/after resize policy.
 fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
     let before = texture_infos
         .iter()
@@ -469,6 +495,7 @@ fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
     }
 }
 
+/// Estimate fee per texture based on max dimension bands.
 fn fee_per_texture(width: u32, height: u32) -> u32 {
     let max_dim = width.max(height);
     if max_dim <= 512 {
@@ -482,6 +509,7 @@ fn fee_per_texture(width: u32, height: u32) -> u32 {
     }
 }
 
+/// Return mapped source->target bone pairs present in the input model.
 fn collect_mapped_bones(node_names: &HashSet<String>) -> Vec<(String, String)> {
     BONE_MAP
         .iter()
@@ -490,6 +518,7 @@ fn collect_mapped_bones(node_names: &HashSet<String>) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Estimate avatar height in centimeters from mesh Y extents.
 fn estimate_height_cm(document: &Document, buffers: &[gltf::buffer::Data]) -> Option<f32> {
     let mut min_y = f32::INFINITY;
     let mut max_y = f32::NEG_INFINITY;
@@ -513,6 +542,7 @@ fn estimate_height_cm(document: &Document, buffers: &[gltf::buffer::Data]) -> Op
     }
 }
 
+/// Apply transforms/cleanup and write the final GLB/GDB output.
 fn transform_and_write_glb(input_path: &Path, output_path: &Path, scale_factor: f32) -> Result<()> {
     let bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
@@ -546,6 +576,7 @@ fn transform_and_write_glb(input_path: &Path, output_path: &Path, scale_factor: 
     Ok(())
 }
 
+/// Rename known bones according to the mapping table.
 fn rename_bones(json: &mut Value) {
     let map: HashMap<&str, &str> = BONE_MAP.into_iter().collect();
 
@@ -560,6 +591,7 @@ fn rename_bones(json: &mut Value) {
     }
 }
 
+/// Remove VRM-specific extensions and recursive extras fields.
 fn remove_vrm_extensions_and_extras(json: &mut Value) {
     if let Some(top_extensions) = json.get_mut("extensions").and_then(Value::as_object_mut) {
         let keys: Vec<String> = top_extensions
@@ -596,6 +628,7 @@ fn remove_vrm_extensions_and_extras(json: &mut Value) {
     remove_key_recursively(json, "extras");
 }
 
+/// Remove unsupported animation and morph-target features.
 fn remove_unsupported_features(json: &mut Value) {
     json.as_object_mut().map(|root| {
         root.remove("animations");
@@ -614,6 +647,7 @@ fn remove_unsupported_features(json: &mut Value) {
     }
 }
 
+/// Apply uniform scale to scene root nodes.
 fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
     let root_node_indices = json
         .get("scenes")
@@ -656,6 +690,7 @@ fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
     }
 }
 
+/// Remove a key recursively from an arbitrary JSON tree.
 fn remove_key_recursively(value: &mut Value, target_key: &str) {
     match value {
         Value::Object(map) => {
@@ -673,6 +708,7 @@ fn remove_key_recursively(value: &mut Value, target_key: &str) {
     }
 }
 
+/// Extract model name from VRM metadata or asset generator.
 fn extract_model_name(json: &Value) -> Option<String> {
     json.pointer("/extensions/VRM/meta/name")
         .or_else(|| json.pointer("/extensions/VRMC_vrm/meta/name"))
@@ -686,6 +722,7 @@ fn extract_model_name(json: &Value) -> Option<String> {
         })
 }
 
+/// Extract author/copyright metadata from VRM or asset section.
 fn extract_author(json: &Value) -> Option<String> {
     json.pointer("/extensions/VRM/meta/authors/0")
         .or_else(|| json.pointer("/extensions/VRMC_vrm/meta/authors/0"))

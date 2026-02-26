@@ -8,6 +8,7 @@ use vrm2sl_tauri_lib::{
     texture::ResizeInterpolation,
 };
 
+/// CLI entry point.
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
@@ -15,6 +16,7 @@ fn main() {
     }
 }
 
+/// Execute CLI workflow for analyze/convert operations.
 fn run() -> Result<()> {
     let mut args = env::args().skip(1).collect::<Vec<String>>();
 
@@ -147,7 +149,7 @@ fn run() -> Result<()> {
         if let Some(path) = save_settings_path {
             save_project_settings(&path, &project_settings)?;
         }
-        let _ = send_desktop_notification("vrm2sl", "解析が完了しました");
+        let _ = send_desktop_notification("vrm2sl", "Analysis completed");
         return Ok(());
     }
 
@@ -185,11 +187,12 @@ fn run() -> Result<()> {
         save_project_settings(&path, &project_settings)?;
     }
 
-    let _ = send_desktop_notification("vrm2sl", "変換が完了しました");
+    let _ = send_desktop_notification("vrm2sl", "Conversion completed");
 
     Ok(())
 }
 
+/// Parse CLI text into the internal resize interpolation enum.
 fn parse_resize_method(value: &str) -> Result<ResizeInterpolation> {
     match value.to_ascii_lowercase().as_str() {
         "nearest" => Ok(ResizeInterpolation::Nearest),

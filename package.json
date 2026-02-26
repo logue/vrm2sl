@@ -37,5 +37,8 @@
     "type-check": "pnpm --recursive exec vue-tsc --build --force",
     "tauri": "pnpm --filter frontend tauri",
     "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
   }
 }

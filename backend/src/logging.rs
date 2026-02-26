@@ -2,10 +2,10 @@ use crate::error::AppError;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 
-// グローバルなAppHandleの保存
+/// Global app handle used for log event emission.
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
-/// ログレベル定義
+/// Log level values emitted to the frontend.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum LogLevel {
