@@ -1,0 +1,124 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+// Components
+import AppBarMenuComponent from '@/components/AppBarMenuComponent.vue';
+import MainContent from '@/components/MainContent.vue';
+import { useConfigStore, useGlobalStore } from '@/store';
+
+/** Global Store */
+const globalStore = useGlobalStore();
+
+/** Config Store */
+const configStore = useConfigStore();
+
+/** Title - Get from vite.config.ts define */
+const title = __APP_NAME__;
+
+/** loading overlay visibility */
+const loading = computed({
+  get: () => globalStore.loading,
+  set: (v: boolean) => globalStore.setLoading(v)
+});
+
+/** Appbar progressbar value */
+const progress = computed({
+  get: () => globalStore.progress,
+  set: (v: number | null) => globalStore.setProgress(v)
+});
+
+/** Snackbar visibility */
+const snackbarVisibility = ref(false);
+
+/** Snackbar text */
+const snackbarText = computed(() => globalStore.message);
+
+/** Toggle Dark mode */
+const theme = computed(() => (configStore.theme ? 'dark' : 'light'));
+
+// When snackbar text has been set, show snackbar.
+watch(
+  () => globalStore.message,
+  message => (snackbarVisibility.value = message !== '')
+);
+
+/** Clear store when snackbar hide */
+const onSnackbarChanged = async () => {
+  globalStore.setMessage();
+  await nextTick();
+};
+
+onMounted(() => {
+  document.title = title;
+  loading.value = false;
+});
+</script>
+
+<template>
+  <v-app :theme="theme" data-tauri-drag-region="true">
+    <v-app-bar color="primary">
+      <v-app-bar-title tag="h1">{{ title }}</v-app-bar-title>
+      <v-spacer />
+      <app-bar-menu-component />
+      <v-progress-linear
+        v-show="loading"
+        :active="loading"
+        :indeterminate="progress === null"
+        :model-value="progress !== null ? progress : 0"
+        color="blue-accent-3"
+      />
+    </v-app-bar>
+
+    <v-main>
+      <main-content />
+    </v-main>
+
+    <v-overlay v-model="loading" app class="justify-center align-center" persistent>
+      <v-progress-circular indeterminate size="64" />
+    </v-overlay>
+
+    <v-snackbar
+      v-model="snackbarVisibility"
+      :color="globalStore.snackbarColor"
+      @update:model-value="onSnackbarChanged"
+    >
+      {{ snackbarText }}
+      <template #actions>
+        <v-btn icon="mdi-close" @click="onSnackbarChanged" />
+      </template>
+    </v-snackbar>
+  </v-app>
+</template>
+
+<style lang="scss">
+/* stylelint-disable-next-line scss/load-no-partial-leading-underscore */
+@use 'vuetify/_settings';
+@use 'sass:map';
+
+body {
+  // Modern scrollbar style
+  scrollbar-width: thin;
+  scrollbar-color: map.get(settings.$grey, 'lighten-2') map.get(settings.$grey, 'base');
+}
+
+::-webkit-scrollbar {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+::-webkit-scrollbar-track {
+  box-shadow: inset 0 0 0.5rem rgba(0, 0, 0, 0.1);
+  background-color: map.get(settings.$grey, 'lighten-2');
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 0.5rem;
+  background-color: map.get(settings.$grey, 'base');
+  box-shadow: inset 0 0 0.5rem rgba(0, 0, 0, 0.1);
+}
+
+// Fix app-bar's progress-bar
+.v-app-bar .v-progress-linear {
+  position: absolute;
+  bottom: 0;
+}
+</style>

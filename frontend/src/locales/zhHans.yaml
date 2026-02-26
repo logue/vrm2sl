@@ -1,0 +1,42 @@
+app:
+  title: 'Tauri Vue3 应用'
+  description: '现代化桌面应用程序'
+
+menu:
+  file: '文件'
+  open: '打开'
+  save: '保存'
+  quit: '退出'
+  edit: '编辑'
+  preferences: '首选项'
+  view: '查看'
+  help: '帮助'
+  about: '关于'
+  documentation: '文档'
+
+message:
+  success: '操作成功'
+  error: '发生错误'
+  processing: '处理中...'
+  loading: '加载中...'
+  saved: '保存成功'
+  cancelled: '操作已取消'
+
+button:
+  ok: '确定'
+  cancel: '取消'
+  save: '保存'
+  close: '关闭'
+  apply: '应用'
+
+label:
+  input: '输入'
+  output: '输出'
+  settings: '设置'
+  language: '语言'
+  theme: '主题'
+
+theme:
+  light: '浅色'
+  dark: '深色'
+  auto: '自动'

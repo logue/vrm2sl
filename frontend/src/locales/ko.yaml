@@ -1,0 +1,42 @@
+app:
+  title: 'Tauri Vue3 앱'
+  description: '현대적인 데스크톱 애플리케이션'
+
+menu:
+  file: '파일'
+  open: '열기'
+  save: '저장'
+  quit: '종료'
+  edit: '편집'
+  preferences: '환경설정'
+  view: '보기'
+  help: '도움말'
+  about: '정보'
+  documentation: '문서'
+
+message:
+  success: '작업이 성공했습니다'
+  error: '오류가 발생했습니다'
+  processing: '처리 중...'
+  loading: '로딩 중...'
+  saved: '저장되었습니다'
+  cancelled: '취소되었습니다'
+
+button:
+  ok: '확인'
+  cancel: '취소'
+  save: '저장'
+  close: '닫기'
+  apply: '적용'
+
+label:
+  input: '입력'
+  output: '출력'
+  settings: '설정'
+  language: '언어'
+  theme: '테마'
+
+theme:
+  light: '라이트'
+  dark: '다크'
+  auto: '자동'

@@ -1,0 +1,41 @@
+{
+  "name": "vrm2sl-app",
+  "description": "VRM to Second Life converter desktop app built with Tauri v2 and Vue 3",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "author": {
+    "name": "Logue",
+    "email": "logue@hotmail.co.jp",
+    "url": "https://logue.dev/"
+  },
+  "homepage": "https://github.com/logue/vrm2sl",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:logue/vrm2sl.git"
+  },
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=10"
+  },
+  "workspaces": [
+    "frontend"
+  ],
+  "packageManager": "pnpm@10.30.2",
+  "scripts": {
+    "dev": "pnpm --filter frontend dev",
+    "dev:tauri": "pnpm --filter frontend dev:tauri",
+    "clean": "pnpm --recursive exec rimraf node_modules/.vite",
+    "build": "pnpm --filter frontend build",
+    "build:analyze": "pnpm --filter frontend build:analyze",
+    "build:clean": "pnpm --recursive exec rimraf dist",
+    "build:tauri": "pnpm --filter frontend build:tauri",
+    "build:tauri:linux-x64": "pnpm --filter frontend build:tauri:linux-docker-x64",
+    "build:tauri:linux-arm64": "pnpm --filter frontend build:tauri:linux-docker-arm64",
+    "lint": "pnpm --filter frontend lint",
+    "preview": "pnpm --filter frontend preview",
+    "type-check": "pnpm --recursive exec vue-tsc --build --force",
+    "tauri": "pnpm --filter frontend tauri",
+    "prepare": "husky"
+  }
+}

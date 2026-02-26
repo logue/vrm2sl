@@ -1,0 +1,42 @@
+app:
+  title: 'Application Tauri Vue3'
+  description: 'Une application de bureau moderne'
+
+menu:
+  file: 'Fichier'
+  open: 'Ouvrir'
+  save: 'Enregistrer'
+  quit: 'Quitter'
+  edit: 'Éditer'
+  preferences: 'Préférences'
+  view: 'Affichage'
+  help: 'Aide'
+  about: 'À propos'
+  documentation: 'Documentation'
+
+message:
+  success: 'Opération réussie'
+  error: "Une erreur s'est produite"
+  processing: 'Traitement en cours...'
+  loading: 'Chargement...'
+  saved: 'Enregistré avec succès'
+  cancelled: 'Opération annulée'
+
+button:
+  ok: 'OK'
+  cancel: 'Annuler'
+  save: 'Enregistrer'
+  close: 'Fermer'
+  apply: 'Appliquer'
+
+label:
+  input: 'Entrée'
+  output: 'Sortie'
+  settings: 'Paramètres'
+  language: 'Langue'
+  theme: 'Thème'
+
+theme:
+  light: 'Clair'
+  dark: 'Sombre'
+  auto: 'Auto'

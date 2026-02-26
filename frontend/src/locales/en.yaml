@@ -1,0 +1,42 @@
+app:
+  title: 'Tauri Vue3 App'
+  description: 'A modern desktop application'
+
+menu:
+  file: 'File'
+  open: 'Open'
+  save: 'Save'
+  quit: 'Quit'
+  edit: 'Edit'
+  preferences: 'Preferences'
+  view: 'View'
+  help: 'Help'
+  about: 'About'
+  documentation: 'Documentation'
+
+message:
+  success: 'Operation successful'
+  error: 'An error occurred'
+  processing: 'Processing...'
+  loading: 'Loading...'
+  saved: 'Saved successfully'
+  cancelled: 'Operation cancelled'
+
+button:
+  ok: 'OK'
+  cancel: 'Cancel'
+  save: 'Save'
+  close: 'Close'
+  apply: 'Apply'
+
+label:
+  input: 'Input'
+  output: 'Output'
+  settings: 'Settings'
+  language: 'Language'
+  theme: 'Theme'
+
+theme:
+  light: 'Light'
+  dark: 'Dark'
+  auto: 'Auto'
