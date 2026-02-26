@@ -1,7 +1,8 @@
 use image::{DynamicImage, imageops::FilterType};
+use serde::{Deserialize, Serialize};
 
 /// Interpolation method used for texture resizing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ResizeInterpolation {
     /// Fast nearest-neighbor interpolation.
     Nearest,

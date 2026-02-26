@@ -6,9 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use gltf::{Document, binary::Glb, import};
+use gltf::{Document, Semantic, binary::Glb, import};
 use nalgebra::Vector3;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::texture::ResizeInterpolation;
@@ -72,6 +72,50 @@ impl Default for ConvertOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationIssue {
+    pub severity: Severity,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextureInfo {
+    pub index: usize,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadFeeEstimate {
+    pub before_linden_dollar: u32,
+    pub after_resize_linden_dollar: u32,
+    pub reduction_percent: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisReport {
+    pub model_name: String,
+    pub author: Option<String>,
+    pub estimated_height_cm: f32,
+    pub bone_count: usize,
+    pub mesh_count: usize,
+    pub total_vertices: usize,
+    pub total_polygons: usize,
+    pub mapped_bones: Vec<(String, String)>,
+    pub missing_required_bones: Vec<String>,
+    pub texture_infos: Vec<TextureInfo>,
+    pub fee_estimate: UploadFeeEstimate,
+    pub issues: Vec<ValidationIssue>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversionReport {
     pub model_name: String,
@@ -81,16 +125,31 @@ pub struct ConversionReport {
     pub computed_scale_factor: f32,
     pub bone_count: usize,
     pub mesh_count: usize,
+    pub total_vertices: usize,
+    pub total_polygons: usize,
     pub mapped_bones: Vec<(String, String)>,
     pub texture_count: usize,
     pub texture_over_1024_count: usize,
+    pub fee_estimate: UploadFeeEstimate,
+    pub issues: Vec<ValidationIssue>,
 }
 
-pub fn convert_vrm_to_gdb(
-    input_path: &Path,
-    output_path: &Path,
-    options: ConvertOptions,
-) -> Result<ConversionReport> {
+const REQUIRED_PARENT_RELATIONS: [(&str, &str); 12] = [
+    ("hips", "spine"),
+    ("spine", "chest"),
+    ("chest", "neck"),
+    ("neck", "head"),
+    ("leftUpperArm", "leftLowerArm"),
+    ("leftLowerArm", "leftHand"),
+    ("rightUpperArm", "rightLowerArm"),
+    ("rightLowerArm", "rightHand"),
+    ("leftUpperLeg", "leftLowerLeg"),
+    ("leftLowerLeg", "leftFoot"),
+    ("rightUpperLeg", "rightLowerLeg"),
+    ("rightLowerLeg", "rightFoot"),
+];
+
+pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<AnalysisReport> {
     let input_bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
     let input_glb = Glb::from_slice(&input_bytes).context("input VRM is not a GLB container")?;
@@ -100,38 +159,149 @@ pub fn convert_vrm_to_gdb(
     let (document, buffers, images) = import(input_path)
         .with_context(|| format!("failed to read VRM/glTF: {}", input_path.display()))?;
 
-    validate_vroid_model(&input_json)?;
+    let mut issues = Vec::<ValidationIssue>::new();
+
+    if let Err(err) = validate_vroid_model(&input_json) {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            code: "UNSUPPORTED_SOURCE".to_string(),
+            message: err.to_string(),
+        });
+    }
 
     let node_names = collect_node_names(&document);
-    ensure_required_bones_exist(&node_names)?;
+    let parent_map = collect_parent_map(&document);
+    let missing_required_bones = collect_missing_required_bones(&node_names);
 
-    let mapped_bones = collect_mapped_bones(&node_names);
+    for missing in &missing_required_bones {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            code: "MISSING_REQUIRED_BONE".to_string(),
+            message: format!("[ERROR] 必須ボーン {} が見つかりません", missing),
+        });
+    }
+
+    issues.extend(validate_hierarchy(&node_names, &parent_map));
+
+    let (total_vertices, total_polygons, mut geometry_issues) = collect_mesh_statistics(&document);
+    issues.append(&mut geometry_issues);
+
+    let texture_infos: Vec<TextureInfo> = images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| TextureInfo {
+            index,
+            width: image.width,
+            height: image.height,
+        })
+        .collect();
+
+    let oversized_count = texture_infos
+        .iter()
+        .filter(|texture| texture.width > 1024 || texture.height > 1024)
+        .count();
+
+    if oversized_count > 0 {
+        issues.push(ValidationIssue {
+            severity: if options.texture_auto_resize {
+                Severity::Info
+            } else {
+                Severity::Warning
+            },
+            code: "TEXTURE_OVERSIZE".to_string(),
+            message: if options.texture_auto_resize {
+                format!(
+                    "⚠️ テクスチャサイズ超過 {} 枚を検出。エクスポート時に1024px上限へ縮小予定です",
+                    oversized_count
+                )
+            } else {
+                format!(
+                    "⚠️ テクスチャサイズ超過 {} 枚を検出。Second Lifeアップロード費用増加の可能性があります",
+                    oversized_count
+                )
+            },
+        });
+    }
+
+    let fee_estimate = estimate_texture_fee(&texture_infos);
+
     let estimated_height_cm = estimate_height_cm(&document, &buffers).unwrap_or(170.0);
-    let computed_scale_factor = if estimated_height_cm > 0.0 {
-        (options.target_height_cm / estimated_height_cm) * options.manual_scale
+
+    Ok(AnalysisReport {
+        model_name: extract_model_name(&input_json)
+            .unwrap_or_else(|| input_path.to_string_lossy().to_string()),
+        author: extract_author(&input_json),
+        estimated_height_cm,
+        bone_count: node_names.len(),
+        mesh_count: document.meshes().count(),
+        total_vertices,
+        total_polygons,
+        mapped_bones: collect_mapped_bones(&node_names),
+        missing_required_bones,
+        texture_infos,
+        fee_estimate,
+        issues,
+    })
+}
+
+pub fn convert_vrm_to_gdb(
+    input_path: &Path,
+    output_path: &Path,
+    options: ConvertOptions,
+) -> Result<ConversionReport> {
+    let analysis = analyze_vrm(input_path, options)?;
+
+    if !analysis.missing_required_bones.is_empty() {
+        bail!(
+            "[ERROR] 必須ボーン不足: {}",
+            analysis.missing_required_bones.join(", ")
+        );
+    }
+
+    if analysis
+        .issues
+        .iter()
+        .any(|issue| issue.severity == Severity::Error)
+    {
+        let message = analysis
+            .issues
+            .iter()
+            .filter(|issue| issue.severity == Severity::Error)
+            .map(|issue| issue.message.clone())
+            .collect::<Vec<String>>()
+            .join(" / ");
+        bail!(message);
+    }
+
+    let computed_scale_factor = if analysis.estimated_height_cm > 0.0 {
+        (options.target_height_cm / analysis.estimated_height_cm) * options.manual_scale
     } else {
         options.manual_scale
     };
 
     transform_and_write_glb(input_path, output_path, computed_scale_factor)?;
 
-    let texture_over_1024_count = images
+    let texture_over_1024_count = analysis
+        .texture_infos
         .iter()
         .filter(|image| image.width > 1024 || image.height > 1024)
         .count();
 
     Ok(ConversionReport {
-        model_name: extract_model_name(&input_json)
-            .unwrap_or_else(|| input_path.to_string_lossy().to_string()),
-        author: extract_author(&input_json),
-        estimated_height_cm,
+        model_name: analysis.model_name,
+        author: analysis.author,
+        estimated_height_cm: analysis.estimated_height_cm,
         target_height_cm: options.target_height_cm,
         computed_scale_factor,
-        bone_count: node_names.len(),
-        mesh_count: document.meshes().count(),
-        mapped_bones,
-        texture_count: images.len(),
+        bone_count: analysis.bone_count,
+        mesh_count: analysis.mesh_count,
+        total_vertices: analysis.total_vertices,
+        total_polygons: analysis.total_polygons,
+        mapped_bones: analysis.mapped_bones,
+        texture_count: analysis.texture_infos.len(),
         texture_over_1024_count,
+        fee_estimate: analysis.fee_estimate,
+        issues: analysis.issues,
     })
 }
 
@@ -169,15 +339,147 @@ fn collect_node_names(document: &Document) -> HashSet<String> {
         .collect()
 }
 
-fn ensure_required_bones_exist(node_names: &HashSet<String>) -> Result<()> {
-    if let Some(missing) = REQUIRED_BONES
-        .iter()
-        .find(|bone_name| !node_names.contains(**bone_name))
-    {
-        bail!("[ERROR] 必須ボーン {} が見つかりません", missing);
+fn collect_parent_map(document: &Document) -> HashMap<String, String> {
+    let mut parent_map = HashMap::new();
+    for parent in document.nodes() {
+        let Some(parent_name) = parent.name() else {
+            continue;
+        };
+
+        for child in parent.children() {
+            if let Some(child_name) = child.name() {
+                parent_map.insert(child_name.to_string(), parent_name.to_string());
+            }
+        }
     }
 
-    Ok(())
+    parent_map
+}
+
+fn collect_missing_required_bones(node_names: &HashSet<String>) -> Vec<String> {
+    REQUIRED_BONES
+        .iter()
+        .filter(|bone_name| !node_names.contains(**bone_name))
+        .map(|bone_name| bone_name.to_string())
+        .collect()
+}
+
+fn validate_hierarchy(
+    node_names: &HashSet<String>,
+    parent_map: &HashMap<String, String>,
+) -> Vec<ValidationIssue> {
+    REQUIRED_PARENT_RELATIONS
+        .iter()
+        .filter_map(|(parent, child)| {
+            if !node_names.contains(*parent) || !node_names.contains(*child) {
+                return None;
+            }
+
+            let Some(actual_parent) = parent_map.get(*child) else {
+                return Some(ValidationIssue {
+                    severity: Severity::Error,
+                    code: "INVALID_BONE_HIERARCHY".to_string(),
+                    message: format!("[ERROR] 非標準的なボーン階層です: {} の親が未設定", child),
+                });
+            };
+
+            if actual_parent != parent {
+                return Some(ValidationIssue {
+                    severity: Severity::Error,
+                    code: "INVALID_BONE_HIERARCHY".to_string(),
+                    message: format!(
+                        "[ERROR] 非標準的なボーン階層です: {} の親が {} ではなく {} です",
+                        child, parent, actual_parent
+                    ),
+                });
+            }
+
+            None
+        })
+        .collect()
+}
+
+fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<ValidationIssue>) {
+    let mut total_vertices = 0usize;
+    let mut total_polygons = 0usize;
+    let mut issues = Vec::<ValidationIssue>::new();
+
+    for mesh in document.meshes() {
+        let mesh_name = mesh.name().unwrap_or("unnamed_mesh");
+        for (primitive_index, primitive) in mesh.primitives().enumerate() {
+            let vertex_count = primitive
+                .get(&Semantic::Positions)
+                .map(|accessor| accessor.count())
+                .unwrap_or(0);
+
+            total_vertices += vertex_count;
+
+            if vertex_count > 65_535 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    code: "VERTEX_LIMIT_EXCEEDED".to_string(),
+                    message: format!(
+                        "⛔ 頂点数オーバー（メッシュ: {}, primitive: {}, 現在: {} / 上限: 65535）",
+                        mesh_name, primitive_index, vertex_count
+                    ),
+                });
+            }
+
+            let index_count = primitive
+                .indices()
+                .map(|indices| indices.count())
+                .unwrap_or(0);
+
+            if index_count > 0 {
+                total_polygons += index_count / 3;
+            } else {
+                total_polygons += vertex_count / 3;
+            }
+        }
+    }
+
+    (total_vertices, total_polygons, issues)
+}
+
+fn estimate_texture_fee(texture_infos: &[TextureInfo]) -> UploadFeeEstimate {
+    let before = texture_infos
+        .iter()
+        .map(|texture| fee_per_texture(texture.width, texture.height))
+        .sum::<u32>();
+
+    let after = texture_infos
+        .iter()
+        .map(|texture| {
+            let clamped_width = texture.width.min(1024);
+            let clamped_height = texture.height.min(1024);
+            fee_per_texture(clamped_width, clamped_height)
+        })
+        .sum::<u32>();
+
+    let reduction_percent = if before > 0 {
+        ((before.saturating_sub(after)) * 100) / before
+    } else {
+        0
+    };
+
+    UploadFeeEstimate {
+        before_linden_dollar: before,
+        after_resize_linden_dollar: after,
+        reduction_percent,
+    }
+}
+
+fn fee_per_texture(width: u32, height: u32) -> u32 {
+    let max_dim = width.max(height);
+    if max_dim <= 512 {
+        10
+    } else if max_dim <= 1024 {
+        20
+    } else if max_dim <= 2048 {
+        50
+    } else {
+        100
+    }
 }
 
 fn collect_mapped_bones(node_names: &HashSet<String>) -> Vec<(String, String)> {
@@ -373,6 +675,7 @@ fn remove_key_recursively(value: &mut Value, target_key: &str) {
 
 fn extract_model_name(json: &Value) -> Option<String> {
     json.pointer("/extensions/VRM/meta/name")
+        .or_else(|| json.pointer("/extensions/VRMC_vrm/meta/name"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -385,6 +688,7 @@ fn extract_model_name(json: &Value) -> Option<String> {
 
 fn extract_author(json: &Value) -> Option<String> {
     json.pointer("/extensions/VRM/meta/authors/0")
+        .or_else(|| json.pointer("/extensions/VRMC_vrm/meta/authors/0"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -393,4 +697,48 @@ fn extract_author(json: &Value) -> Option<String> {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_texture_sizes_when_estimating_fee_then_reduction_is_computed() {
+        let textures = vec![
+            TextureInfo {
+                index: 0,
+                width: 2048,
+                height: 2048,
+            },
+            TextureInfo {
+                index: 1,
+                width: 1024,
+                height: 1024,
+            },
+        ];
+
+        let estimate = estimate_texture_fee(&textures);
+        assert!(estimate.before_linden_dollar > estimate.after_resize_linden_dollar);
+        assert!(estimate.reduction_percent > 0);
+    }
+
+    #[test]
+    fn given_required_hierarchy_when_parent_mismatch_then_error_is_reported() {
+        let node_names = ["hips", "spine", "chest"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<HashSet<String>>();
+
+        let mut parent_map = HashMap::new();
+        parent_map.insert("spine".to_string(), "hips".to_string());
+        parent_map.insert("chest".to_string(), "hips".to_string());
+
+        let issues = validate_hierarchy(&node_names, &parent_map);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "INVALID_BONE_HIERARCHY")
+        );
+    }
 }
