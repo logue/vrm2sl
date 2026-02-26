@@ -1,5 +1,7 @@
 # vrm2sl
 
+![screenshot](./images/ss1.png)
+
 VRM to SecondLife Avatar bone converter.
 
 ## Usage
@@ -21,7 +23,7 @@ vrm2sl input.vrm output.gdb
 vrm2sl input.vrm output.gdb --analyze-only --report report.json
 ```
 
-解析または変換が完了すると、デスクトップ通知を送信します（macOSでは `osascript` を利用）。
+When analysis or conversion completes, a desktop notification is sent (on macOS, via `osascript`).
 
 ### Main options
 
@@ -35,23 +37,23 @@ vrm2sl input.vrm output.gdb --analyze-only --report report.json
 
 ## Tauri IPC integration layer
 
-Rust側でTauri `invoke` に接続しやすいIPC向け関数を公開しています。
+The Rust side exposes IPC-friendly functions designed for easy integration with Tauri `invoke`.
 
 - `ipc::analyze_vrm_ipc`
 - `ipc::convert_vrm_to_gdb_ipc`
 - `ipc::save_project_settings_ipc`
 - `ipc::load_project_settings_ipc`
 
-それぞれ `String` パスとシリアライズ可能なリクエスト構造体を受け取り、
-UI層から直接呼び出せる入出力形式になっています。
+Each function accepts `String` paths and serializable request structs,
+with input/output shapes that can be called directly from the UI layer.
 
 ## Tauri + Vuetify app (integrated)
 
-`tauri-vuetify-starter` をこのリポジトリに取り込み済みです。
+`tauri-vuetify-starter` is integrated into this repository.
 
 - Frontend: `frontend/`
 - Tauri backend: `backend/`
-- Rustコア実装: `backend/src/`
+- Rust core implementation: `backend/src/`
 
 ### Desktop app run
 
@@ -60,14 +62,14 @@ pnpm install
 pnpm dev:tauri
 ```
 
-UIの `MainContent` から以下を実行できます。
+From `MainContent` in the UI, you can:
 
-- VRMファイル選択
-- 解析（ボーン/頂点/テクスチャ/費用見積）
-- 設定JSONの保存・読込
-- `.gdb` エクスポート
+- Select a VRM file
+- Run analysis (bones/vertices/textures/upload cost estimate)
+- Save/load settings JSON
+- Export `.gdb`
 
-解析/変換完了時はデスクトップ通知を送信します。
+Desktop notifications are sent when analysis/conversion completes.
 
 ## Implemented (core MVP baseline)
 

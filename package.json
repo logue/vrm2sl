@@ -21,7 +21,7 @@
   "workspaces": [
     "frontend"
   ],
-  "packageManager": "pnpm@10.30.2",
+  "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "pnpm --filter frontend dev",
     "dev:tauri": "pnpm --filter frontend dev:tauri",
