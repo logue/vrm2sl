@@ -33,7 +33,7 @@ const updateRendererSize = () => {
   const width = canvasHost.value.clientWidth;
   const height = Math.min(Math.max(canvasHost.value.clientHeight, 280), 420);
 
-  renderer.setSize(width, height, false);
+  renderer.setSize(width, height, true);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 };
@@ -66,18 +66,25 @@ const fitCameraToModel = (root: THREE.Object3D) => {
     return;
   }
 
+  root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) {
+    return;
+  }
+
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxSize = Math.max(size.x, size.y, size.z, 0.1);
 
-  camera.position.x = center.x;
+  camera.position.set(center.x, center.y + maxSize * 0.4, center.z + maxSize * 1.8);
   camera.near = Math.max(maxSize / 200, 0.01);
   camera.far = Math.max(maxSize * 200, 1000);
   camera.updateProjectionMatrix();
+  camera.lookAt(center);
 
-  controls.target.x = center.x;
+  controls.target.copy(center);
   controls.update();
+  controls.saveState();
 };
 
 const loadPreviewModel = async (path: string, options: ConvertOptions) => {
@@ -163,6 +170,9 @@ onMounted(() => {
   controls.enableDamping = true;
   controls.minDistance = 0.2;
   controls.maxDistance = 50;
+  controls.target.set(0, 0, 0);
+  camera.lookAt(controls.target);
+  controls.update();
 
   const ambient = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9);
   scene.add(ambient);
