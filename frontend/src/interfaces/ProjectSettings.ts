@@ -1,6 +1,6 @@
-import type { ConvertOptions } from './ConvertOptions';
 import type { FaceSettings } from './FaceSettings';
 import type { FingerSettings } from './FingerSettings';
+import type { ConvertOptions } from './ConvertOptions';
 
 /** Serializable project settings persisted as JSON. */
 export interface ProjectSettings {

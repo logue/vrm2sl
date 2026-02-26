@@ -1,7 +1,3 @@
-export { TextureResizeMethod } from './TextureResizeMethod';
-
-export { ValidationSeverity } from './ValidationSeverity';
-
 export type { ConvertOptions } from './ConvertOptions';
 export type { TextureInfo } from './TextureInfo';
 export type { UploadFeeEstimate } from './UploadFeeEstimate';

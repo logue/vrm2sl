@@ -4,13 +4,13 @@ import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFileSystem } from '@/composables/useFileSystem';
 import { useNotification } from '@/composables/useNotification';
-import { ValidationSeverity } from '@/types/vrm2sl';
+import { ValidationSeverity } from '@/types';
 import type {
   AnalysisReport,
   ConversionReport,
   ConvertOptions,
   ProjectSettings
-} from '@/types/vrm2sl';
+} from '@/interfaces';
 import { useGlobalStore } from '@/store';
 
 const { t } = useI18n();

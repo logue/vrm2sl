@@ -1,4 +1,4 @@
-import type { TextureResizeMethod } from './TextureResizeMethod';
+import type { TextureResizeMethod } from '@/types/TextureResizeMethod';
 
 /** Conversion options sent to backend analyze/convert commands. */
 export interface ConvertOptions {

@@ -1,4 +1,4 @@
-import type { ValidationSeverity } from './ValidationSeverity';
+import type { ValidationSeverity } from '@/types/ValidationSeverity';
 
 /** Validation issue returned from backend checks. */
 export interface ValidationIssue {
