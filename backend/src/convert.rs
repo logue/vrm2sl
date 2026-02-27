@@ -57,6 +57,26 @@ const BONE_MAP: [(&str, &str); 17] = [
     ("rightFoot", "mAnkleRight"),
 ];
 
+/// Core hierarchy edges to reconstruct for SL-compatible humanoid skeleton.
+const CORE_HIERARCHY_RELATIONS: [(&str, &str); 16] = [
+    ("hips", "spine"),
+    ("spine", "chest"),
+    ("chest", "neck"),
+    ("neck", "head"),
+    ("chest", "leftUpperArm"),
+    ("leftUpperArm", "leftLowerArm"),
+    ("leftLowerArm", "leftHand"),
+    ("chest", "rightUpperArm"),
+    ("rightUpperArm", "rightLowerArm"),
+    ("rightLowerArm", "rightHand"),
+    ("hips", "leftUpperLeg"),
+    ("leftUpperLeg", "leftLowerLeg"),
+    ("leftLowerLeg", "leftFoot"),
+    ("hips", "rightUpperLeg"),
+    ("rightUpperLeg", "rightLowerLeg"),
+    ("rightLowerLeg", "rightFoot"),
+];
+
 /// SL-target upper-limb bone names used for A-pose -> T-pose correction.
 const UPPER_LIMB_TARGET_BONES: [&str; 6] = [
     "mShoulderLeft",
@@ -670,6 +690,7 @@ fn transform_and_write_glb(
 
     rename_bones(&mut json, humanoid_bone_nodes);
     ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
+    reconstruct_sl_core_hierarchy(&mut json, humanoid_bone_nodes);
     apply_upper_limb_t_pose_correction(&mut json);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
@@ -840,6 +861,72 @@ fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) 
                 }
             }
         }
+    }
+}
+
+/// Reconstruct core humanoid hierarchy toward SL-compatible parent-child links.
+fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
+    let planned_links: Vec<(usize, usize)> = CORE_HIERARCHY_RELATIONS
+        .iter()
+        .filter_map(|(parent, child)| {
+            let parent_index = humanoid_bone_nodes.get(*parent).copied()?;
+            let child_index = humanoid_bone_nodes.get(*child).copied()?;
+            if parent_index == child_index {
+                return None;
+            }
+            Some((parent_index, child_index))
+        })
+        .collect();
+
+    if planned_links.is_empty() {
+        return;
+    }
+
+    let controlled_children: HashSet<usize> =
+        planned_links.iter().map(|(_, child)| *child).collect();
+
+    if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
+        for node in nodes.iter_mut() {
+            if let Some(children) = node.get_mut("children").and_then(Value::as_array_mut) {
+                children.retain(|child| {
+                    child
+                        .as_u64()
+                        .map(|index| !controlled_children.contains(&(index as usize)))
+                        .unwrap_or(true)
+                });
+            }
+        }
+
+        for (parent_index, child_index) in planned_links {
+            if let Some(parent_node) = nodes.get_mut(parent_index) {
+                let children = parent_node.as_object_mut().map(|object| {
+                    object
+                        .entry("children")
+                        .or_insert_with(|| Value::Array(vec![]))
+                });
+
+                if let Some(Value::Array(children)) = children {
+                    let child_value = Value::from(child_index as u64);
+                    if !children.iter().any(|entry| entry == &child_value) {
+                        children.push(child_value);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(first_scene_nodes) = json
+        .get_mut("scenes")
+        .and_then(Value::as_array_mut)
+        .and_then(|scenes| scenes.first_mut())
+        .and_then(|scene| scene.get_mut("nodes"))
+        .and_then(Value::as_array_mut)
+    {
+        first_scene_nodes.retain(|node| {
+            node.as_u64()
+                .map(|index| !controlled_children.contains(&(index as usize)))
+                .unwrap_or(true)
+        });
     }
 }
 
@@ -1990,6 +2077,69 @@ mod tests {
                 Value::from(1.0)
             ]
         );
+    }
+
+    #[test]
+    fn given_messy_hierarchy_when_reconstructing_then_core_links_follow_sl_shape() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {"name":"mPelvis", "children":[2,7]},
+                {"name":"mTorso", "children":[]},
+                {"name":"mChest", "children":[4]},
+                {"name":"mNeck", "children":[]},
+                {"name":"mHead", "children":[]},
+                {"name":"mShoulderLeft", "children":[]},
+                {"name":"mElbowLeft", "children":[]},
+                {"name":"mWristLeft", "children":[]},
+                {"name":"mHipLeft", "children":[]},
+                {"name":"mKneeLeft", "children":[]},
+                {"name":"mAnkleLeft", "children":[]}
+            ],
+            "scenes": [
+                {"nodes":[0,1,2,3,4,5,6,7,8,9,10]}
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("hips".to_string(), 0usize),
+            ("spine".to_string(), 1usize),
+            ("chest".to_string(), 2usize),
+            ("neck".to_string(), 3usize),
+            ("head".to_string(), 4usize),
+            ("leftUpperArm".to_string(), 5usize),
+            ("leftLowerArm".to_string(), 6usize),
+            ("leftHand".to_string(), 7usize),
+            ("leftUpperLeg".to_string(), 8usize),
+            ("leftLowerLeg".to_string(), 9usize),
+            ("leftFoot".to_string(), 10usize),
+        ]);
+
+        reconstruct_sl_core_hierarchy(&mut json, &humanoid);
+
+        let hips_children = json
+            .pointer("/nodes/0/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(hips_children.contains(&Value::from(1u64)));
+        assert!(hips_children.contains(&Value::from(8u64)));
+
+        let chest_children = json
+            .pointer("/nodes/2/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(chest_children.contains(&Value::from(3u64)));
+        assert!(chest_children.contains(&Value::from(5u64)));
+
+        let scene_roots = json
+            .pointer("/scenes/0/nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(scene_roots.contains(&Value::from(0u64)));
+        assert!(!scene_roots.contains(&Value::from(1u64)));
+        assert!(!scene_roots.contains(&Value::from(2u64)));
     }
 
     #[test]
