@@ -671,6 +671,7 @@ fn transform_and_write_glb(
     rename_bones(&mut json, humanoid_bone_nodes);
     ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
     apply_upper_limb_t_pose_correction(&mut json);
+    optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
@@ -1200,6 +1201,462 @@ fn write_mat4_f32_le(bin: &mut [u8], offset: usize, matrix: &Matrix4<f32>) {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AccessorMeta {
+    base_offset: usize,
+    stride: usize,
+    count: usize,
+    component_type: u64,
+    accessor_type: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrimitiveSkinBinding {
+    joints_accessor: usize,
+    weights_accessor: usize,
+}
+
+/// Redistribute skin weights by removing unused joint slots and remapping
+/// JOINTS_0 indices, then compact skin.joints / inverseBindMatrices.
+fn optimize_skinning_weights_and_joints(json: &mut Value, bin: &mut [u8]) -> Result<()> {
+    let skin_count = json
+        .get("skins")
+        .and_then(Value::as_array)
+        .map(|skins| skins.len())
+        .unwrap_or(0);
+
+    for skin_index in 0..skin_count {
+        let bindings = collect_skin_primitive_bindings(json, skin_index);
+        if bindings.is_empty() {
+            continue;
+        }
+
+        let joints_len = json
+            .get("skins")
+            .and_then(Value::as_array)
+            .and_then(|skins| skins.get(skin_index))
+            .and_then(|skin| skin.get("joints"))
+            .and_then(Value::as_array)
+            .map(|joints| joints.len())
+            .unwrap_or(0);
+
+        if joints_len == 0 {
+            continue;
+        }
+
+        let mut used_slots = vec![false; joints_len];
+        for binding in &bindings {
+            scan_used_joint_slots(json, bin, *binding, &mut used_slots);
+        }
+
+        let mut keep_slots: Vec<usize> = used_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, used)| if *used { Some(index) } else { None })
+            .collect();
+        if keep_slots.is_empty() {
+            keep_slots = (0..joints_len).collect();
+        }
+
+        let mut old_to_new = vec![None; joints_len];
+        for (new_index, old_index) in keep_slots.iter().copied().enumerate() {
+            old_to_new[old_index] = Some(new_index as u16);
+        }
+
+        for binding in &bindings {
+            remap_primitive_joints_and_weights(json, bin, *binding, &old_to_new);
+        }
+
+        compact_skin_joints_and_inverse_bind_matrices(json, bin, skin_index, &keep_slots)?;
+    }
+
+    Ok(())
+}
+
+fn collect_skin_primitive_bindings(json: &Value, skin_index: usize) -> Vec<PrimitiveSkinBinding> {
+    let nodes = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let meshes = json
+        .get("meshes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut seen = HashSet::<(usize, usize)>::new();
+    let mut bindings = Vec::<PrimitiveSkinBinding>::new();
+
+    for node in nodes {
+        let Some(node_skin_index) = node
+            .get("skin")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+        else {
+            continue;
+        };
+        if node_skin_index != skin_index {
+            continue;
+        }
+
+        let Some(mesh_index) = node
+            .get("mesh")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+        else {
+            continue;
+        };
+        let Some(mesh) = meshes.get(mesh_index) else {
+            continue;
+        };
+        let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for primitive in primitives {
+            let Some(attributes) = primitive.get("attributes").and_then(Value::as_object) else {
+                continue;
+            };
+            let Some(joints_accessor) = attributes
+                .get("JOINTS_0")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+            else {
+                continue;
+            };
+            let Some(weights_accessor) = attributes
+                .get("WEIGHTS_0")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+            else {
+                continue;
+            };
+
+            if seen.insert((joints_accessor, weights_accessor)) {
+                bindings.push(PrimitiveSkinBinding {
+                    joints_accessor,
+                    weights_accessor,
+                });
+            }
+        }
+    }
+
+    bindings
+}
+
+fn scan_used_joint_slots(
+    json: &Value,
+    bin: &[u8],
+    binding: PrimitiveSkinBinding,
+    used_slots: &mut [bool],
+) {
+    let Some(joints_meta) = accessor_meta(json, binding.joints_accessor) else {
+        return;
+    };
+    let Some(weights_meta) = accessor_meta(json, binding.weights_accessor) else {
+        return;
+    };
+    if joints_meta.accessor_type != "VEC4" || weights_meta.accessor_type != "VEC4" {
+        return;
+    }
+    if !(joints_meta.component_type == 5121 || joints_meta.component_type == 5123) {
+        return;
+    }
+    if weights_meta.component_type != 5126 {
+        return;
+    }
+
+    let count = joints_meta.count.min(weights_meta.count);
+    for vertex_index in 0..count {
+        for lane in 0..4 {
+            let weight = read_weight_f32(bin, &weights_meta, vertex_index, lane).unwrap_or(0.0);
+            if weight <= 1e-6 {
+                continue;
+            }
+            let slot = read_joint_slot(bin, &joints_meta, vertex_index, lane).unwrap_or(0) as usize;
+            if slot < used_slots.len() {
+                used_slots[slot] = true;
+            }
+        }
+    }
+}
+
+fn remap_primitive_joints_and_weights(
+    json: &Value,
+    bin: &mut [u8],
+    binding: PrimitiveSkinBinding,
+    old_to_new: &[Option<u16>],
+) {
+    let Some(joints_meta) = accessor_meta(json, binding.joints_accessor) else {
+        return;
+    };
+    let Some(weights_meta) = accessor_meta(json, binding.weights_accessor) else {
+        return;
+    };
+    if joints_meta.accessor_type != "VEC4" || weights_meta.accessor_type != "VEC4" {
+        return;
+    }
+    if !(joints_meta.component_type == 5121 || joints_meta.component_type == 5123) {
+        return;
+    }
+    if weights_meta.component_type != 5126 {
+        return;
+    }
+
+    let fallback = old_to_new.iter().flatten().copied().next().unwrap_or(0u16);
+
+    let count = joints_meta.count.min(weights_meta.count);
+    for vertex_index in 0..count {
+        let mut slots = [0u16; 4];
+        let mut weights = [0.0f32; 4];
+
+        for lane in 0..4 {
+            slots[lane] = read_joint_slot(bin, &joints_meta, vertex_index, lane).unwrap_or(0);
+            weights[lane] = read_weight_f32(bin, &weights_meta, vertex_index, lane).unwrap_or(0.0);
+        }
+
+        for lane in 0..4 {
+            let old_slot = slots[lane] as usize;
+            if let Some(Some(mapped)) = old_to_new.get(old_slot) {
+                slots[lane] = *mapped;
+            } else {
+                slots[lane] = fallback;
+                weights[lane] = 0.0;
+            }
+        }
+
+        let sum = weights.iter().sum::<f32>();
+        if sum > 1e-8 {
+            for weight in &mut weights {
+                *weight /= sum;
+            }
+        } else {
+            slots = [fallback, fallback, fallback, fallback];
+            weights = [1.0, 0.0, 0.0, 0.0];
+        }
+
+        for lane in 0..4 {
+            write_joint_slot(bin, &joints_meta, vertex_index, lane, slots[lane]);
+            write_weight_f32(bin, &weights_meta, vertex_index, lane, weights[lane]);
+        }
+    }
+}
+
+fn compact_skin_joints_and_inverse_bind_matrices(
+    json: &mut Value,
+    bin: &mut [u8],
+    skin_index: usize,
+    keep_slots: &[usize],
+) -> Result<()> {
+    let joints_before = json
+        .get("skins")
+        .and_then(Value::as_array)
+        .and_then(|skins| skins.get(skin_index))
+        .and_then(|skin| skin.get("joints"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    if joints_before.is_empty() {
+        return Ok(());
+    }
+
+    let compacted_joints: Vec<Value> = keep_slots
+        .iter()
+        .filter_map(|slot| joints_before.get(*slot).cloned())
+        .collect();
+
+    let inverse_bind_accessor_index = json
+        .get("skins")
+        .and_then(Value::as_array)
+        .and_then(|skins| skins.get(skin_index))
+        .and_then(|skin| skin.get("inverseBindMatrices"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+
+    if let Some(accessor_index) = inverse_bind_accessor_index {
+        compact_inverse_bind_accessor(json, bin, accessor_index, keep_slots)?;
+    }
+
+    if let Some(skins) = json.get_mut("skins").and_then(Value::as_array_mut)
+        && let Some(skin) = skins.get_mut(skin_index)
+    {
+        skin["joints"] = Value::Array(compacted_joints);
+    }
+
+    Ok(())
+}
+
+fn compact_inverse_bind_accessor(
+    json: &mut Value,
+    bin: &mut [u8],
+    accessor_index: usize,
+    keep_slots: &[usize],
+) -> Result<()> {
+    let Some(meta) = accessor_meta(json, accessor_index) else {
+        return Ok(());
+    };
+    if meta.accessor_type != "MAT4" || meta.component_type != 5126 {
+        return Ok(());
+    }
+
+    let old_count = meta.count;
+    let stride = meta.stride.max(64);
+    let mut matrices = Vec::<[u8; 64]>::new();
+
+    for slot in keep_slots.iter().copied() {
+        if slot >= old_count {
+            continue;
+        }
+        let offset = meta.base_offset + slot * stride;
+        if offset + 64 > bin.len() {
+            continue;
+        }
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(&bin[offset..offset + 64]);
+        matrices.push(bytes);
+    }
+
+    for (index, bytes) in matrices.iter().enumerate() {
+        let offset = meta.base_offset + index * stride;
+        if offset + 64 > bin.len() {
+            break;
+        }
+        bin[offset..offset + 64].copy_from_slice(bytes);
+    }
+
+    let Some(accessors) = json.get_mut("accessors").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let Some(accessor) = accessors.get_mut(accessor_index) else {
+        return Ok(());
+    };
+    accessor["count"] = Value::from(matrices.len() as u64);
+
+    Ok(())
+}
+
+fn accessor_meta(json: &Value, accessor_index: usize) -> Option<AccessorMeta> {
+    let accessors = json.get("accessors")?.as_array()?;
+    let accessor = accessors.get(accessor_index)?;
+    let buffer_view_index = accessor.get("bufferView")?.as_u64()? as usize;
+    let buffer_views = json.get("bufferViews")?.as_array()?;
+    let buffer_view = buffer_views.get(buffer_view_index)?;
+
+    let accessor_type = accessor.get("type")?.as_str()?;
+    let element_count = match accessor_type {
+        "SCALAR" => 1,
+        "VEC2" => 2,
+        "VEC3" => 3,
+        "VEC4" => 4,
+        "MAT4" => 16,
+        _ => return None,
+    };
+
+    let component_type = accessor.get("componentType")?.as_u64()?;
+    let component_size = match component_type {
+        5120 | 5121 => 1,
+        5122 | 5123 => 2,
+        5125 | 5126 => 4,
+        _ => return None,
+    };
+
+    let view_offset = buffer_view
+        .get("byteOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let accessor_offset = accessor
+        .get("byteOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let default_stride = element_count * component_size;
+    let stride = buffer_view
+        .get("byteStride")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(default_stride);
+
+    Some(AccessorMeta {
+        base_offset: view_offset + accessor_offset,
+        stride,
+        count: accessor.get("count")?.as_u64()? as usize,
+        component_type,
+        accessor_type: match accessor_type {
+            "SCALAR" => "SCALAR",
+            "VEC2" => "VEC2",
+            "VEC3" => "VEC3",
+            "VEC4" => "VEC4",
+            "MAT4" => "MAT4",
+            _ => return None,
+        },
+    })
+}
+
+fn read_joint_slot(bin: &[u8], meta: &AccessorMeta, vertex: usize, lane: usize) -> Option<u16> {
+    let offset = meta.base_offset
+        + vertex * meta.stride
+        + lane
+            * match meta.component_type {
+                5121 => 1,
+                5123 => 2,
+                _ => return None,
+            };
+
+    match meta.component_type {
+        5121 => bin.get(offset).copied().map(|value| value as u16),
+        5123 => {
+            let bytes = bin.get(offset..offset + 2)?;
+            Some(u16::from_le_bytes([bytes[0], bytes[1]]))
+        }
+        _ => None,
+    }
+}
+
+fn write_joint_slot(bin: &mut [u8], meta: &AccessorMeta, vertex: usize, lane: usize, value: u16) {
+    let offset = meta.base_offset
+        + vertex * meta.stride
+        + lane
+            * match meta.component_type {
+                5121 => 1,
+                5123 => 2,
+                _ => return,
+            };
+
+    match meta.component_type {
+        5121 => {
+            if let Some(byte) = bin.get_mut(offset) {
+                *byte = value.min(u8::MAX as u16) as u8;
+            }
+        }
+        5123 => {
+            if let Some(slice) = bin.get_mut(offset..offset + 2) {
+                slice.copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn read_weight_f32(bin: &[u8], meta: &AccessorMeta, vertex: usize, lane: usize) -> Option<f32> {
+    if meta.component_type != 5126 {
+        return None;
+    }
+    let offset = meta.base_offset + vertex * meta.stride + lane * 4;
+    let bytes = bin.get(offset..offset + 4)?;
+    Some(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn write_weight_f32(bin: &mut [u8], meta: &AccessorMeta, vertex: usize, lane: usize, value: f32) {
+    if meta.component_type != 5126 {
+        return;
+    }
+    let offset = meta.base_offset + vertex * meta.stride + lane * 4;
+    if let Some(slice) = bin.get_mut(offset..offset + 4) {
+        slice.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
 /// Extract humanoid-bone semantic to node-index mapping from VRM extensions.
 fn extract_humanoid_bone_nodes(json: &Value) -> HashMap<String, usize> {
     let mut mapping = HashMap::<String, usize>::new();
@@ -1533,5 +1990,74 @@ mod tests {
                 Value::from(1.0)
             ]
         );
+    }
+
+    #[test]
+    fn given_unused_joint_slot_when_optimizing_skinning_then_joints_and_ibm_are_compacted() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                { "mesh": 0, "skin": 0 },
+                { "name": "jointA" },
+                { "name": "jointB" },
+                { "name": "jointUnused" }
+            ],
+            "meshes": [
+                {
+                    "primitives": [
+                        {
+                            "attributes": {
+                                "JOINTS_0": 0,
+                                "WEIGHTS_0": 1
+                            }
+                        }
+                    ]
+                }
+            ],
+            "skins": [
+                {
+                    "joints": [1, 2, 3],
+                    "inverseBindMatrices": 2
+                }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5121, "count": 2, "type": "VEC4" },
+                { "bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC4" },
+                { "bufferView": 2, "componentType": 5126, "count": 3, "type": "MAT4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": 8, "byteLength": 32 },
+                { "buffer": 0, "byteOffset": 40, "byteLength": 192 }
+            ],
+            "buffers": [
+                { "byteLength": 232 }
+            ]
+        });
+
+        let mut bin = vec![0u8; 232];
+
+        bin[0..8].copy_from_slice(&[0, 1, 2, 2, 1, 0, 2, 2]);
+
+        let weights = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        for (index, value) in weights.iter().enumerate() {
+            let offset = 8 + index * 4;
+            bin[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        optimize_skinning_weights_and_joints(&mut json, &mut bin)
+            .expect("optimization should succeed");
+
+        let joints_len = json
+            .pointer("/skins/0/joints")
+            .and_then(Value::as_array)
+            .map(|array| array.len())
+            .unwrap_or(0);
+        assert_eq!(joints_len, 2);
+
+        let ibm_count = json
+            .pointer("/accessors/2/count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        assert_eq!(ibm_count, 2);
     }
 }
