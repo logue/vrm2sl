@@ -57,6 +57,44 @@ const BONE_MAP: [(&str, &str); 17] = [
     ("rightFoot", "mAnkleRight"),
 ];
 
+/// Optional Bento extension mapping (eyes, jaw, fingers) from VRM humanoid
+/// names to SL target bone names.
+const BENTO_BONE_MAP: [(&str, &str); 33] = [
+    ("leftEye", "mEyeLeft"),
+    ("rightEye", "mEyeRight"),
+    ("jaw", "mFaceJaw"),
+    ("leftThumbProximal", "mHandThumb1Left"),
+    ("leftThumbIntermediate", "mHandThumb2Left"),
+    ("leftThumbDistal", "mHandThumb3Left"),
+    ("leftIndexProximal", "mHandIndex1Left"),
+    ("leftIndexIntermediate", "mHandIndex2Left"),
+    ("leftIndexDistal", "mHandIndex3Left"),
+    ("leftMiddleProximal", "mHandMiddle1Left"),
+    ("leftMiddleIntermediate", "mHandMiddle2Left"),
+    ("leftMiddleDistal", "mHandMiddle3Left"),
+    ("leftRingProximal", "mHandRing1Left"),
+    ("leftRingIntermediate", "mHandRing2Left"),
+    ("leftRingDistal", "mHandRing3Left"),
+    ("leftLittleProximal", "mHandPinky1Left"),
+    ("leftLittleIntermediate", "mHandPinky2Left"),
+    ("leftLittleDistal", "mHandPinky3Left"),
+    ("rightThumbProximal", "mHandThumb1Right"),
+    ("rightThumbIntermediate", "mHandThumb2Right"),
+    ("rightThumbDistal", "mHandThumb3Right"),
+    ("rightIndexProximal", "mHandIndex1Right"),
+    ("rightIndexIntermediate", "mHandIndex2Right"),
+    ("rightIndexDistal", "mHandIndex3Right"),
+    ("rightMiddleProximal", "mHandMiddle1Right"),
+    ("rightMiddleIntermediate", "mHandMiddle2Right"),
+    ("rightMiddleDistal", "mHandMiddle3Right"),
+    ("rightRingProximal", "mHandRing1Right"),
+    ("rightRingIntermediate", "mHandRing2Right"),
+    ("rightRingDistal", "mHandRing3Right"),
+    ("rightLittleProximal", "mHandPinky1Right"),
+    ("rightLittleIntermediate", "mHandPinky2Right"),
+    ("rightLittleDistal", "mHandPinky3Right"),
+];
+
 /// Core hierarchy edges to reconstruct for SL-compatible humanoid skeleton.
 const CORE_HIERARCHY_RELATIONS: [(&str, &str); 16] = [
     ("hips", "spine"),
@@ -75,6 +113,43 @@ const CORE_HIERARCHY_RELATIONS: [(&str, &str); 16] = [
     ("hips", "rightUpperLeg"),
     ("rightUpperLeg", "rightLowerLeg"),
     ("rightLowerLeg", "rightFoot"),
+];
+
+/// Optional hierarchy edges for Bento extension bones.
+const BENTO_HIERARCHY_RELATIONS: [(&str, &str); 33] = [
+    ("head", "leftEye"),
+    ("head", "rightEye"),
+    ("head", "jaw"),
+    ("leftHand", "leftThumbProximal"),
+    ("leftThumbProximal", "leftThumbIntermediate"),
+    ("leftThumbIntermediate", "leftThumbDistal"),
+    ("leftHand", "leftIndexProximal"),
+    ("leftIndexProximal", "leftIndexIntermediate"),
+    ("leftIndexIntermediate", "leftIndexDistal"),
+    ("leftHand", "leftMiddleProximal"),
+    ("leftMiddleProximal", "leftMiddleIntermediate"),
+    ("leftMiddleIntermediate", "leftMiddleDistal"),
+    ("leftHand", "leftRingProximal"),
+    ("leftRingProximal", "leftRingIntermediate"),
+    ("leftRingIntermediate", "leftRingDistal"),
+    ("leftHand", "leftLittleProximal"),
+    ("leftLittleProximal", "leftLittleIntermediate"),
+    ("leftLittleIntermediate", "leftLittleDistal"),
+    ("rightHand", "rightThumbProximal"),
+    ("rightThumbProximal", "rightThumbIntermediate"),
+    ("rightThumbIntermediate", "rightThumbDistal"),
+    ("rightHand", "rightIndexProximal"),
+    ("rightIndexProximal", "rightIndexIntermediate"),
+    ("rightIndexIntermediate", "rightIndexDistal"),
+    ("rightHand", "rightMiddleProximal"),
+    ("rightMiddleProximal", "rightMiddleIntermediate"),
+    ("rightMiddleIntermediate", "rightMiddleDistal"),
+    ("rightHand", "rightRingProximal"),
+    ("rightRingProximal", "rightRingIntermediate"),
+    ("rightRingIntermediate", "rightRingDistal"),
+    ("rightHand", "rightLittleProximal"),
+    ("rightLittleProximal", "rightLittleIntermediate"),
+    ("rightLittleIntermediate", "rightLittleDistal"),
 ];
 
 /// SL-target upper-limb bone names used for A-pose -> T-pose correction.
@@ -641,6 +716,7 @@ fn fee_per_texture(width: u32, height: u32) -> u32 {
 fn collect_mapped_bones(humanoid_bone_nodes: &HashMap<String, usize>) -> Vec<(String, String)> {
     BONE_MAP
         .iter()
+        .chain(BENTO_BONE_MAP.iter())
         .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
         .map(|(source, target)| (source.to_string(), target.to_string()))
         .collect()
@@ -854,8 +930,8 @@ fn apply_texture_resize_to_embedded_images(
 /// Rename known bones according to the mapping table.
 fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
     if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
-        for (source, target) in BONE_MAP {
-            if let Some(node_index) = humanoid_bone_nodes.get(source).copied() {
+        for (source, target) in BONE_MAP.iter().chain(BENTO_BONE_MAP.iter()) {
+            if let Some(node_index) = humanoid_bone_nodes.get(*source).copied() {
                 if let Some(node) = nodes.get_mut(node_index) {
                     node["name"] = Value::String(target.to_string());
                 }
@@ -868,6 +944,7 @@ fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) 
 fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
     let planned_links: Vec<(usize, usize)> = CORE_HIERARCHY_RELATIONS
         .iter()
+        .chain(BENTO_HIERARCHY_RELATIONS.iter())
         .filter_map(|(parent, child)| {
             let parent_index = humanoid_bone_nodes.get(*parent).copied()?;
             let child_index = humanoid_bone_nodes.get(*child).copied()?;
@@ -943,6 +1020,7 @@ fn validate_bone_conversion_preconditions(
 
     BONE_MAP
         .iter()
+        .chain(BENTO_BONE_MAP.iter())
         .filter_map(|(source, _)| {
             let Some(node_index) = humanoid_bone_nodes.get(*source).copied() else {
                 return None;
@@ -973,6 +1051,7 @@ fn ensure_target_bones_exist_after_rename(
 
     let expected_targets: Vec<String> = BONE_MAP
         .iter()
+        .chain(BENTO_BONE_MAP.iter())
         .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
         .map(|(_, target)| target.to_string())
         .collect();
@@ -2140,6 +2219,95 @@ mod tests {
         assert!(scene_roots.contains(&Value::from(0u64)));
         assert!(!scene_roots.contains(&Value::from(1u64)));
         assert!(!scene_roots.contains(&Value::from(2u64)));
+    }
+
+    #[test]
+    fn given_bento_humanoid_mapping_when_renaming_then_eye_jaw_and_finger_names_are_mapped() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {"name":"leftEye"},
+                {"name":"jaw"},
+                {"name":"leftIndexProximal"},
+                {"name":"leftIndexIntermediate"},
+                {"name":"leftIndexDistal"}
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("leftEye".to_string(), 0usize),
+            ("jaw".to_string(), 1usize),
+            ("leftIndexProximal".to_string(), 2usize),
+            ("leftIndexIntermediate".to_string(), 3usize),
+            ("leftIndexDistal".to_string(), 4usize),
+        ]);
+
+        rename_bones(&mut json, &humanoid);
+
+        assert_eq!(
+            json.pointer("/nodes/0/name").and_then(Value::as_str),
+            Some("mEyeLeft")
+        );
+        assert_eq!(
+            json.pointer("/nodes/1/name").and_then(Value::as_str),
+            Some("mFaceJaw")
+        );
+        assert_eq!(
+            json.pointer("/nodes/2/name").and_then(Value::as_str),
+            Some("mHandIndex1Left")
+        );
+        assert_eq!(
+            json.pointer("/nodes/3/name").and_then(Value::as_str),
+            Some("mHandIndex2Left")
+        );
+        assert_eq!(
+            json.pointer("/nodes/4/name").and_then(Value::as_str),
+            Some("mHandIndex3Left")
+        );
+    }
+
+    #[test]
+    fn given_bento_hand_chain_when_reconstructing_then_finger_chain_is_relinked() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {"name":"mWristLeft", "children":[]},
+                {"name":"mHandIndex1Left", "children":[]},
+                {"name":"mHandIndex2Left", "children":[]},
+                {"name":"mHandIndex3Left", "children":[]}
+            ],
+            "scenes": [
+                {"nodes":[0,1,2,3]}
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("leftHand".to_string(), 0usize),
+            ("leftIndexProximal".to_string(), 1usize),
+            ("leftIndexIntermediate".to_string(), 2usize),
+            ("leftIndexDistal".to_string(), 3usize),
+        ]);
+
+        reconstruct_sl_core_hierarchy(&mut json, &humanoid);
+
+        let hand_children = json
+            .pointer("/nodes/0/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(hand_children.contains(&Value::from(1u64)));
+
+        let idx1_children = json
+            .pointer("/nodes/1/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(idx1_children.contains(&Value::from(2u64)));
+
+        let idx2_children = json
+            .pointer("/nodes/2/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(idx2_children.contains(&Value::from(3u64)));
     }
 
     #[test]
