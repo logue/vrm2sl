@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf, process};
 
 use anyhow::{Context, Result, bail};
 use vrm2sl_tauri_lib::{
-    convert::{ConvertOptions, analyze_vrm, convert_vrm_to_gdb},
+    convert::{ConvertOptions, analyze_vrm, convert_vrm_to_gdb, write_final_validation_checklist},
     notify::send_desktop_notification,
     project::{ProjectSettings, load_project_settings, save_project_settings},
     texture::ResizeInterpolation,
@@ -22,7 +22,7 @@ fn run() -> Result<()> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: vrm2sl <input.vrm> <output.gdb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--report <report.json>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
+            "Usage: vrm2sl <input.vrm> <output.gdb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
         );
         process::exit(2);
     }
@@ -35,6 +35,7 @@ fn run() -> Result<()> {
     project_settings.output_path = Some(output.to_string_lossy().to_string());
 
     let mut report_path: Option<PathBuf> = None;
+    let mut validation_checklist_path: Option<PathBuf> = None;
     let mut analyze_only = false;
     let mut save_settings_path: Option<PathBuf> = None;
 
@@ -78,6 +79,13 @@ fn run() -> Result<()> {
             "--report" => {
                 let value = args.get(index + 1).context("--report requires a path")?;
                 report_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--validation-checklist" => {
+                let value = args
+                    .get(index + 1)
+                    .context("--validation-checklist requires a path")?;
+                validation_checklist_path = Some(PathBuf::from(value));
                 index += 2;
             }
             "--analyze-only" => {
@@ -154,6 +162,11 @@ fn run() -> Result<()> {
     }
 
     let report = convert_vrm_to_gdb(&input, &output, options)?;
+
+    if let Some(path) = validation_checklist_path {
+        write_final_validation_checklist(&path, &input, &output, &report)?;
+        println!("Validation checklist written: {}", path.display());
+    }
 
     println!("Model: {}", report.model_name);
     println!(

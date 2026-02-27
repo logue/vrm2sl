@@ -256,6 +256,78 @@ pub struct ConversionReport {
     pub issues: Vec<ValidationIssue>,
 }
 
+/// Generate a reusable markdown checklist for final manual validation flow.
+///
+/// This checklist is intended for the final v0.8 step:
+/// re-open converted output in any 3D modeling tool and verify before
+/// uploading to Second Life.
+pub fn write_final_validation_checklist(
+    checklist_path: &Path,
+    input_path: &Path,
+    output_path: &Path,
+    report: &ConversionReport,
+) -> Result<()> {
+    let mut content = String::new();
+    content.push_str("# vrm2sl Final Validation Checklist\n\n");
+    content.push_str("## Conversion Summary\n\n");
+    content.push_str(&format!("- Input: `{}`\n", input_path.display()));
+    content.push_str(&format!("- Output: `{}`\n", output_path.display()));
+    content.push_str(&format!("- Model: `{}`\n", report.model_name));
+    content.push_str(&format!(
+        "- Estimated height: `{:.2} cm`\n",
+        report.estimated_height_cm
+    ));
+    content.push_str(&format!(
+        "- Target height: `{:.2} cm`\n",
+        report.target_height_cm
+    ));
+    content.push_str(&format!(
+        "- Computed scale: `{:.4}`\n",
+        report.computed_scale_factor
+    ));
+    content.push_str(&format!(
+        "- Meshes/Bones: `{}` / `{}`\n",
+        report.mesh_count, report.bone_count
+    ));
+    content.push_str(&format!(
+        "- Vertices/Polygons: `{}` / `{}`\n",
+        report.total_vertices, report.total_polygons
+    ));
+    content.push_str(&format!(
+        "- Texture fee estimate: `{}L$ -> {}L$`\n\n",
+        report.fee_estimate.before_linden_dollar, report.fee_estimate.after_resize_linden_dollar
+    ));
+
+    content.push_str("## Validation Flow (Manual)\n\n");
+    content.push_str("- [ ] Open the converted `.gdb` file in any 3D modeling tool.\n");
+    content.push_str("- [ ] Confirm armature loads without collapse/crash.\n");
+    content.push_str("- [ ] Verify T-pose-like arm orientation (no severe A-pose residual).\n");
+    content
+        .push_str("- [ ] Verify core hierarchy shape (pelvis->torso->chest->neck->head, limbs).\n");
+    content.push_str("- [ ] Verify eye/jaw/finger Bento bones exist when source contained them.\n");
+    content.push_str("- [ ] Verify there is no obvious skin explosion or detached limbs.\n");
+    content.push_str("- [ ] Upload to Second Life and confirm avatar deformation is acceptable.\n");
+    content.push_str("- [ ] Confirm idle/walk behavior has no critical breakage in-world.\n\n");
+
+    content.push_str("## Issues from Conversion\n\n");
+    if report.issues.is_empty() {
+        content.push_str("- None\n");
+    } else {
+        for issue in &report.issues {
+            content.push_str(&format!("- [{:?}] {}\n", issue.severity, issue.message));
+        }
+    }
+
+    fs::write(checklist_path, content).with_context(|| {
+        format!(
+            "failed to write validation checklist: {}",
+            checklist_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
 /// Required parent-child relationships used for hierarchy validation.
 const REQUIRED_PARENT_RELATIONS: [(&str, &str); 12] = [
     ("hips", "spine"),
