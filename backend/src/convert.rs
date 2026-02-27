@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use gltf::{Document, Semantic, binary::Glb, import};
 use image::ImageFormat;
-use nalgebra::Vector3;
+use nalgebra::{Matrix4, Quaternion, Translation3, UnitQuaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -55,6 +55,16 @@ const BONE_MAP: [(&str, &str); 17] = [
     ("rightUpperLeg", "mHipRight"),
     ("rightLowerLeg", "mKneeRight"),
     ("rightFoot", "mAnkleRight"),
+];
+
+/// SL-target upper-limb bone names used for A-pose -> T-pose correction.
+const UPPER_LIMB_TARGET_BONES: [&str; 6] = [
+    "mShoulderLeft",
+    "mElbowLeft",
+    "mWristLeft",
+    "mShoulderRight",
+    "mElbowRight",
+    "mWristRight",
 ];
 
 /// Conversion options shared by CLI and Tauri IPC entry points.
@@ -202,6 +212,10 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
     }
 
     issues.extend(validate_hierarchy(&humanoid_bone_nodes, &parent_index_map));
+    issues.extend(validate_bone_conversion_preconditions(
+        &input_json,
+        &humanoid_bone_nodes,
+    ));
 
     let (total_vertices, total_polygons, mut geometry_issues) = collect_mesh_statistics(&document);
     issues.append(&mut geometry_issues);
@@ -655,6 +669,9 @@ fn transform_and_write_glb(
     let mut bin = glb.bin.map(|chunk| chunk.into_owned()).unwrap_or_default();
 
     rename_bones(&mut json, humanoid_bone_nodes);
+    ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
+    apply_upper_limb_t_pose_correction(&mut json);
+    regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
     apply_uniform_scale_to_scene_roots(&mut json, scale_factor);
@@ -822,6 +839,364 @@ fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) 
                 }
             }
         }
+    }
+}
+
+/// Validate that required source bones point to valid node indices before conversion.
+fn validate_bone_conversion_preconditions(
+    json: &Value,
+    humanoid_bone_nodes: &HashMap<String, usize>,
+) -> Vec<ValidationIssue> {
+    let node_count = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.len())
+        .unwrap_or(0);
+
+    BONE_MAP
+        .iter()
+        .filter_map(|(source, _)| {
+            let Some(node_index) = humanoid_bone_nodes.get(*source).copied() else {
+                return None;
+            };
+
+            if node_index >= node_count {
+                return Some(ValidationIssue {
+                    severity: Severity::Error,
+                    code: "INVALID_BONE_NODE_INDEX".to_string(),
+                    message: format!(
+                        "[ERROR] Bone conversion precondition failed: '{}' points to invalid node index {} (node count: {})",
+                        source, node_index, node_count
+                    ),
+                });
+            }
+
+            None
+        })
+        .collect()
+}
+
+/// Ensure all expected target SL bone names exist after rename.
+fn ensure_target_bones_exist_after_rename(
+    json: &Value,
+    humanoid_bone_nodes: &HashMap<String, usize>,
+) -> Result<()> {
+    let node_name_set = collect_node_name_set_from_json(json);
+
+    let expected_targets: Vec<String> = BONE_MAP
+        .iter()
+        .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
+        .map(|(_, target)| target.to_string())
+        .collect();
+
+    let missing_targets: Vec<String> = expected_targets
+        .into_iter()
+        .filter(|target| !node_name_set.contains(target))
+        .collect();
+
+    if !missing_targets.is_empty() {
+        bail!(
+            "[ERROR] Bone conversion incomplete: missing target SL bone names after rename: {}",
+            missing_targets.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+/// Collect all node names from glTF JSON nodes array.
+fn collect_node_name_set_from_json(json: &Value) -> HashSet<String> {
+    json.get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|node| {
+                    node.get("name")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Apply pragmatic A-pose -> T-pose correction to upper-limb bones by
+/// normalizing local rotations to identity on known SL arm joints.
+fn apply_upper_limb_t_pose_correction(json: &mut Value) {
+    let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for node in nodes {
+        let is_target_upper_limb = node
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| UPPER_LIMB_TARGET_BONES.contains(&name))
+            .unwrap_or(false);
+
+        if !is_target_upper_limb {
+            continue;
+        }
+
+        if let Some(object) = node.as_object_mut() {
+            object.remove("matrix");
+            object.insert(
+                "rotation".to_string(),
+                serde_json::json!([0.0, 0.0, 0.0, 1.0]),
+            );
+            if !object.contains_key("translation") {
+                object.insert(
+                    "translation".to_string(),
+                    serde_json::json!([0.0, 0.0, 0.0]),
+                );
+            }
+            if !object.contains_key("scale") {
+                object.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
+            }
+        }
+    }
+}
+
+/// Rebuild inverse bind matrices from current node transforms and write them
+/// back to the binary buffer for all skins that have writable MAT4 float accessors.
+fn regenerate_inverse_bind_matrices(json: &mut Value, bin: &mut [u8]) -> Result<()> {
+    if bin.is_empty() {
+        return Ok(());
+    }
+
+    let Some(nodes_json) = json.get("nodes").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let node_locals: Vec<Matrix4<f32>> = nodes_json.iter().map(node_to_local_matrix).collect();
+    let parent_map = collect_parent_index_map_from_json(json);
+    let node_worlds = compute_node_world_matrices(&node_locals, &parent_map);
+
+    let Some(skins) = json.get("skins").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let accessors = json
+        .get("accessors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let buffer_views = json
+        .get("bufferViews")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for skin in skins {
+        let Some(joints) = skin.get("joints").and_then(Value::as_array) else {
+            continue;
+        };
+
+        let Some(accessor_index) = skin
+            .get("inverseBindMatrices")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+        else {
+            continue;
+        };
+
+        let Some(accessor) = accessors.get(accessor_index) else {
+            continue;
+        };
+
+        let component_type = accessor
+            .get("componentType")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let accessor_type = accessor
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if component_type != 5126 || accessor_type != "MAT4" {
+            continue;
+        }
+
+        let Some(buffer_view_index) = accessor
+            .get("bufferView")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+        else {
+            continue;
+        };
+
+        let Some(buffer_view) = buffer_views.get(buffer_view_index) else {
+            continue;
+        };
+
+        let view_offset = buffer_view
+            .get("byteOffset")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let accessor_offset = accessor
+            .get("byteOffset")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let base_offset = view_offset.saturating_add(accessor_offset);
+        let stride = buffer_view
+            .get("byteStride")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(64);
+
+        for (joint_array_index, joint) in joints.iter().enumerate() {
+            let Some(joint_index) = joint.as_u64().map(|value| value as usize) else {
+                continue;
+            };
+            let Some(world) = node_worlds.get(joint_index) else {
+                continue;
+            };
+
+            let inverse = world.try_inverse().unwrap_or_else(Matrix4::<f32>::identity);
+            let write_offset = base_offset.saturating_add(joint_array_index.saturating_mul(stride));
+            if write_offset + 64 > bin.len() {
+                continue;
+            }
+            write_mat4_f32_le(bin, write_offset, &inverse);
+        }
+    }
+
+    Ok(())
+}
+
+/// Collect child->parent node index mapping from glTF JSON.
+fn collect_parent_index_map_from_json(json: &Value) -> HashMap<usize, usize> {
+    let mut parent_map = HashMap::<usize, usize>::new();
+    let Some(nodes) = json.get("nodes").and_then(Value::as_array) else {
+        return parent_map;
+    };
+
+    for (parent_index, node) in nodes.iter().enumerate() {
+        let Some(children) = node.get("children").and_then(Value::as_array) else {
+            continue;
+        };
+        for child in children {
+            if let Some(child_index) = child.as_u64().map(|value| value as usize) {
+                parent_map.insert(child_index, parent_index);
+            }
+        }
+    }
+
+    parent_map
+}
+
+/// Build local transform matrix from a glTF node JSON object.
+fn node_to_local_matrix(node: &Value) -> Matrix4<f32> {
+    if let Some(matrix) = node.get("matrix").and_then(Value::as_array)
+        && matrix.len() == 16
+    {
+        let mut values = [0.0f32; 16];
+        for (index, value) in matrix.iter().enumerate() {
+            values[index] = value.as_f64().unwrap_or(0.0) as f32;
+        }
+        return Matrix4::from_row_slice(&values).transpose();
+    }
+
+    let translation = node
+        .get("translation")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 3)
+        .map(|values| {
+            Vector3::new(
+                values[0].as_f64().unwrap_or(0.0) as f32,
+                values[1].as_f64().unwrap_or(0.0) as f32,
+                values[2].as_f64().unwrap_or(0.0) as f32,
+            )
+        })
+        .unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+
+    let rotation = node
+        .get("rotation")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 4)
+        .map(|values| {
+            UnitQuaternion::from_quaternion(Quaternion::new(
+                values[3].as_f64().unwrap_or(1.0) as f32,
+                values[0].as_f64().unwrap_or(0.0) as f32,
+                values[1].as_f64().unwrap_or(0.0) as f32,
+                values[2].as_f64().unwrap_or(0.0) as f32,
+            ))
+        })
+        .unwrap_or_else(UnitQuaternion::identity);
+
+    let scale = node
+        .get("scale")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 3)
+        .map(|values| {
+            Vector3::new(
+                values[0].as_f64().unwrap_or(1.0) as f32,
+                values[1].as_f64().unwrap_or(1.0) as f32,
+                values[2].as_f64().unwrap_or(1.0) as f32,
+            )
+        })
+        .unwrap_or(Vector3::new(1.0, 1.0, 1.0));
+
+    let translation_matrix = Translation3::from(translation).to_homogeneous();
+    let rotation_matrix = rotation.to_homogeneous();
+    let scale_matrix = Matrix4::new_nonuniform_scaling(&scale);
+    translation_matrix * rotation_matrix * scale_matrix
+}
+
+/// Compute world matrices from local transforms and parent links.
+fn compute_node_world_matrices(
+    local_matrices: &[Matrix4<f32>],
+    parent_map: &HashMap<usize, usize>,
+) -> Vec<Matrix4<f32>> {
+    let mut worlds = vec![Matrix4::<f32>::identity(); local_matrices.len()];
+    let mut resolved = vec![false; local_matrices.len()];
+
+    for index in 0..local_matrices.len() {
+        resolve_world_matrix(
+            index,
+            local_matrices,
+            parent_map,
+            &mut worlds,
+            &mut resolved,
+        );
+    }
+
+    worlds
+}
+
+fn resolve_world_matrix(
+    index: usize,
+    local_matrices: &[Matrix4<f32>],
+    parent_map: &HashMap<usize, usize>,
+    worlds: &mut [Matrix4<f32>],
+    resolved: &mut [bool],
+) {
+    if resolved[index] {
+        return;
+    }
+
+    let world = if let Some(parent_index) = parent_map.get(&index).copied() {
+        resolve_world_matrix(parent_index, local_matrices, parent_map, worlds, resolved);
+        worlds[parent_index] * local_matrices[index]
+    } else {
+        local_matrices[index]
+    };
+
+    worlds[index] = world;
+    resolved[index] = true;
+}
+
+/// Write a MAT4 (column-major) to binary as little-endian f32 sequence.
+fn write_mat4_f32_le(bin: &mut [u8], offset: usize, matrix: &Matrix4<f32>) {
+    let mut cursor = offset;
+    for value in matrix.as_slice() {
+        let bytes = value.to_le_bytes();
+        let end = cursor + 4;
+        if end > bin.len() {
+            return;
+        }
+        bin[cursor..end].copy_from_slice(&bytes);
+        cursor = end;
     }
 }
 
@@ -1090,5 +1465,73 @@ mod tests {
         assert_eq!(mapping.get("hips"), Some(&1usize));
         assert_eq!(mapping.get("spine"), Some(&2usize));
         assert_eq!(mapping.get("chest"), Some(&3usize));
+    }
+
+    #[test]
+    fn given_invalid_humanoid_node_index_when_validating_preconditions_then_error_is_reported() {
+        let input_json = serde_json::json!({
+            "nodes": [
+                {"name": "Node0"}
+            ]
+        });
+
+        let humanoid_bone_nodes = [("hips".to_string(), 99usize)]
+            .into_iter()
+            .collect::<HashMap<String, usize>>();
+
+        let issues = validate_bone_conversion_preconditions(&input_json, &humanoid_bone_nodes);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "INVALID_BONE_NODE_INDEX")
+        );
+    }
+
+    #[test]
+    fn given_missing_target_bone_after_rename_when_ensuring_targets_then_error_is_returned() {
+        let input_json = serde_json::json!({
+            "nodes": [
+                {"name": "hips"},
+                {"name": "spine"}
+            ]
+        });
+
+        let humanoid_bone_nodes = [("hips".to_string(), 0usize), ("spine".to_string(), 1usize)]
+            .into_iter()
+            .collect::<HashMap<String, usize>>();
+
+        let result = ensure_target_bones_exist_after_rename(&input_json, &humanoid_bone_nodes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_upper_limb_target_node_when_applying_t_pose_then_rotation_is_identity() {
+        let mut input_json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mShoulderLeft",
+                    "rotation": [0.0, 0.0, -0.2, 0.98],
+                    "translation": [1.0, 2.0, 3.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            ]
+        });
+
+        apply_upper_limb_t_pose_correction(&mut input_json);
+        let rotation = input_json
+            .pointer("/nodes/0/rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(
+            rotation,
+            vec![
+                Value::from(0.0),
+                Value::from(0.0),
+                Value::from(0.0),
+                Value::from(1.0)
+            ]
+        );
     }
 }
