@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use gltf::{Document, Semantic, binary::Glb, import};
 use image::ImageFormat;
-use nalgebra::{Matrix4, Quaternion, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Matrix4, Quaternion, Translation3, UnitQuaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -299,7 +299,7 @@ pub fn write_final_validation_checklist(
     ));
 
     content.push_str("## Validation Flow (Manual)\n\n");
-    content.push_str("- [ ] Open the converted `.gdb` file in any 3D modeling tool.\n");
+    content.push_str("- [ ] Open the converted `.glb` file in any 3D modeling tool.\n");
     content.push_str("- [ ] Confirm armature loads without collapse/crash.\n");
     content.push_str("- [ ] Verify T-pose-like arm orientation (no severe A-pose residual).\n");
     content
@@ -459,7 +459,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
     })
 }
 
-/// Convert a VRM file to Second Life-oriented `.gdb` output.
+/// Convert a VRM file to Second Life-oriented `.glb` output.
 pub fn convert_vrm_to_gdb(
     input_path: &Path,
     output_path: &Path,
@@ -538,7 +538,7 @@ pub fn convert_vrm_to_gdb(
     })
 }
 
-/// Collect texture dimensions from an exported GLB/GDB output file.
+/// Collect texture dimensions from an exported GLB output file.
 fn collect_output_texture_infos(output_path: &Path) -> Result<Vec<TextureInfo>> {
     let (_, _, images) = import(output_path)
         .with_context(|| format!("failed to read output VRM/glTF: {}", output_path.display()))?;
@@ -818,7 +818,7 @@ fn estimate_height_cm(document: &Document, buffers: &[gltf::buffer::Data]) -> Op
     }
 }
 
-/// Apply transforms/cleanup and write the final GLB/GDB output.
+/// Apply transforms/cleanup and write the final GLB output.
 fn transform_and_write_glb(
     input_path: &Path,
     output_path: &Path,
@@ -840,7 +840,14 @@ fn transform_and_write_glb(
     ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
     reconstruct_sl_core_hierarchy(&mut json, humanoid_bone_nodes);
     apply_upper_limb_t_pose_correction(&mut json);
+    // Remap weights from unmapped VRM bones (e.g. upperChest, spring bones)
+    // to their nearest mapped-SL ancestor so that only valid SL bones remain
+    // in the skin joints list after optimization.
+    remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    // Set skin.skeleton to the hips (mPelvis) node so every importer agrees on
+    // the skeleton root, then regenerate IBMs against the corrected hierarchy.
+    set_skin_skeleton_to_pelvis(&mut json, humanoid_bone_nodes);
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
@@ -968,23 +975,22 @@ fn apply_texture_resize_to_embedded_images(
 
     let mut rebuilt = Vec::<u8>::new();
     let mut offsets = Vec::<usize>::with_capacity(segments.len());
+    let mut lengths = Vec::<usize>::with_capacity(segments.len());
     for mut chunk in segments {
         while rebuilt.len() % 4 != 0 {
             rebuilt.push(0);
         }
         offsets.push(rebuilt.len());
+        lengths.push(chunk.len());
         rebuilt.append(&mut chunk);
     }
 
     if let Some(buffer_views_mut) = json.get_mut("bufferViews").and_then(Value::as_array_mut) {
         for (index, view) in buffer_views_mut.iter_mut().enumerate() {
             if let Some(offset) = offsets.get(index).copied() {
-                let length = rebuilt.len().saturating_sub(offset);
-                let next_offset = offsets.get(index + 1).copied().unwrap_or(rebuilt.len());
-                let byte_length = next_offset.saturating_sub(offset);
+                let byte_length = lengths.get(index).copied().unwrap_or_default();
                 view["byteOffset"] = Value::from(offset as u64);
                 view["byteLength"] = Value::from(byte_length as u64);
-                let _ = length;
             }
         }
     }
@@ -1014,6 +1020,15 @@ fn rename_bones(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) 
 
 /// Reconstruct core humanoid hierarchy toward SL-compatible parent-child links.
 fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
+    let original_node_locals: Vec<Matrix4<f32>> = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
+        .unwrap_or_default();
+    let original_parent_map = collect_parent_index_map_from_json(json);
+    let original_node_worlds =
+        compute_node_world_matrices(&original_node_locals, &original_parent_map);
+
     let planned_links: Vec<(usize, usize)> = CORE_HIERARCHY_RELATIONS
         .iter()
         .chain(BENTO_HIERARCHY_RELATIONS.iter())
@@ -1033,6 +1048,10 @@ fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap
 
     let controlled_children: HashSet<usize> =
         planned_links.iter().map(|(_, child)| *child).collect();
+    let planned_parent_map: HashMap<usize, usize> = planned_links
+        .iter()
+        .map(|(parent, child)| (*child, *parent))
+        .collect();
 
     if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
         for node in nodes.iter_mut() {
@@ -1062,6 +1081,23 @@ fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap
                 }
             }
         }
+
+        for (child_index, parent_index) in planned_parent_map {
+            let (Some(parent_world), Some(child_world)) = (
+                original_node_worlds.get(parent_index),
+                original_node_worlds.get(child_index),
+            ) else {
+                continue;
+            };
+
+            let Some(new_local) = parent_world.try_inverse().map(|inv| inv * child_world) else {
+                continue;
+            };
+
+            if let Some(child_node) = nodes.get_mut(child_index) {
+                set_node_local_matrix(child_node, &new_local);
+            }
+        }
     }
 
     if let Some(first_scene_nodes) = json
@@ -1077,6 +1113,68 @@ fn reconstruct_sl_core_hierarchy(json: &mut Value, humanoid_bone_nodes: &HashMap
                 .unwrap_or(true)
         });
     }
+}
+
+fn set_node_local_matrix(node: &mut Value, matrix: &Matrix4<f32>) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+
+    let translation = Vector3::new(matrix[(0, 3)], matrix[(1, 3)], matrix[(2, 3)]);
+
+    let basis_x = Vector3::new(matrix[(0, 0)], matrix[(1, 0)], matrix[(2, 0)]);
+    let basis_y = Vector3::new(matrix[(0, 1)], matrix[(1, 1)], matrix[(2, 1)]);
+    let basis_z = Vector3::new(matrix[(0, 2)], matrix[(1, 2)], matrix[(2, 2)]);
+
+    let mut scale_x = basis_x.norm();
+    let scale_y = basis_y.norm();
+    let scale_z = basis_z.norm();
+
+    let mut rot_x = if scale_x > 1e-8 {
+        basis_x / scale_x
+    } else {
+        Vector3::new(1.0, 0.0, 0.0)
+    };
+    let rot_y = if scale_y > 1e-8 {
+        basis_y / scale_y
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
+    let rot_z = if scale_z > 1e-8 {
+        basis_z / scale_z
+    } else {
+        Vector3::new(0.0, 0.0, 1.0)
+    };
+
+    if rot_x.cross(&rot_y).dot(&rot_z) < 0.0 {
+        scale_x = -scale_x;
+        rot_x = -rot_x;
+    }
+
+    let rotation_matrix = Matrix3::from_columns(&[rot_x, rot_y, rot_z]);
+    let rotation = UnitQuaternion::from_matrix(&rotation_matrix);
+
+    object.remove("translation");
+    object.remove("rotation");
+    object.remove("scale");
+    object.remove("matrix");
+    object.insert(
+        "translation".to_string(),
+        serde_json::json!([translation.x, translation.y, translation.z]),
+    );
+    object.insert(
+        "rotation".to_string(),
+        serde_json::json!([
+            rotation.coords.x,
+            rotation.coords.y,
+            rotation.coords.z,
+            rotation.coords.w
+        ]),
+    );
+    object.insert(
+        "scale".to_string(),
+        serde_json::json!([scale_x, scale_y, scale_z]),
+    );
 }
 
 /// Validate that required source bones point to valid node indices before conversion.
@@ -1193,6 +1291,227 @@ fn apply_upper_limb_t_pose_correction(json: &mut Value) {
             if !object.contains_key("scale") {
                 object.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
             }
+        }
+    }
+}
+
+/// Remap vertex weights from non-SL (unmapped) VRM bones to their nearest SL-mapped
+/// ancestor in the skeleton hierarchy. This ensures that only bones present in SL's
+/// skeleton remain as active joints after `optimize_skinning_weights_and_joints` runs.
+///
+/// Unmapped bones include:
+/// - `upperChest` (not in BONE_MAP; SL uses only chest/spine/neck chain)
+/// - Spring/secondary bones (`J_Sec_*`) used for clothing/hair physics in VRM
+///
+/// The strategy: for each skin, identify which joint-slot indices refer to
+/// unmapped node names (not starting with `m`), then scan every vertex and
+/// for weight > 0 on an unmapped slot, transfer that weight to the nearest
+/// ancestor that IS mapped (walk parent chain via `nodes[i].parent`).
+fn remap_unmapped_bone_weights(
+    json: &mut Value,
+    bin: &mut [u8],
+    humanoid_bone_nodes: &HashMap<String, usize>,
+) {
+    // Build a set of all SL-mapped node indices (after rename_bones these nodes
+    // already have SL names, but we use indices for fast lookup).
+    let sl_node_indices: HashSet<usize> = BONE_MAP
+        .iter()
+        .chain(BENTO_BONE_MAP.iter())
+        .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
+        .collect();
+
+    // Build parent map: node_index -> parent_index.
+    let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let mut parent_of = vec![None::<usize>; node_count];
+    if let Some(nodes) = json["nodes"].as_array() {
+        for (parent_idx, node) in nodes.iter().enumerate() {
+            if let Some(children) = node["children"].as_array() {
+                for child in children {
+                    if let Some(child_idx) = child.as_u64().map(|v| v as usize) {
+                        if child_idx < parent_of.len() {
+                            parent_of[child_idx] = Some(parent_idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper: walk up the parent chain from `node_idx` until we find a node
+    // in `sl_node_indices` or exhaust the ancestry.
+    let find_sl_ancestor = |start: usize| -> Option<usize> {
+        let mut cur = parent_of[start];
+        while let Some(p) = cur {
+            if sl_node_indices.contains(&p) {
+                return Some(p);
+            }
+            cur = parent_of.get(p).and_then(|v| *v);
+        }
+        None
+    };
+
+    let skin_count = json["skins"].as_array().map(|s| s.len()).unwrap_or(0);
+
+    for skin_index in 0..skin_count {
+        // Collect the joints list for this skin.
+        let joints: Vec<usize> = json["skins"][skin_index]["joints"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if joints.is_empty() {
+            continue;
+        }
+
+        // For each joint slot, decide if it needs to be remapped.
+        // slot_remap[old_slot] = new_slot (may be the same if already SL).
+        let mut slot_remap: Vec<usize> = (0..joints.len()).collect();
+        let mut any_remap = false;
+        for (slot, &node_idx) in joints.iter().enumerate() {
+            if sl_node_indices.contains(&node_idx) {
+                continue;
+            }
+            // Unmapped bone — find its nearest SL ancestor.
+            if let Some(ancestor_node_idx) = find_sl_ancestor(node_idx) {
+                if let Some(ancestor_slot) = joints.iter().position(|&j| j == ancestor_node_idx) {
+                    slot_remap[slot] = ancestor_slot;
+                    any_remap = true;
+                }
+                // If ancestor isn't in this skin's joint list yet, leave as-is;
+                // optimize_skinning_weights_and_joints will compact it away if weight=0.
+            }
+        }
+
+        if !any_remap {
+            continue;
+        }
+
+        // Apply the slot remap to all primitive bindings for this skin.
+        let bindings = collect_skin_primitive_bindings(json, skin_index);
+        for binding in bindings {
+            let Some(joints_meta) = accessor_meta(json, binding.joints_accessor) else {
+                continue;
+            };
+            let Some(weights_meta) = accessor_meta(json, binding.weights_accessor) else {
+                continue;
+            };
+            if joints_meta.accessor_type != "VEC4" || weights_meta.accessor_type != "VEC4" {
+                continue;
+            }
+            if !(joints_meta.component_type == 5121 || joints_meta.component_type == 5123) {
+                continue;
+            }
+            if weights_meta.component_type != 5126 {
+                continue;
+            }
+
+            let count = joints_meta.count.min(weights_meta.count);
+            for vertex_index in 0..count {
+                let mut slots = [0u16; 4];
+                let mut weights = [0.0f32; 4];
+                for lane in 0..4 {
+                    slots[lane] =
+                        read_joint_slot(bin, &joints_meta, vertex_index, lane).unwrap_or(0);
+                    weights[lane] =
+                        read_weight_f32(bin, &weights_meta, vertex_index, lane).unwrap_or(0.0);
+                }
+
+                // Merge weights from unmapped slots into their remapped targets.
+                let mut new_weights = [0.0f32; 4];
+                let mut new_slots = [0u16; 4];
+                // First pass: copy or accumulate into target slots.
+                // We build a temporary per-slot accumulator indexed by slot index.
+                let mut acc = vec![0.0f32; joints.len()];
+                for lane in 0..4 {
+                    let old_slot = slots[lane] as usize;
+                    if old_slot >= slot_remap.len() {
+                        continue;
+                    }
+                    let target_slot = slot_remap[old_slot];
+                    if target_slot < acc.len() {
+                        acc[target_slot] += weights[lane];
+                    }
+                }
+
+                // Pick the 4 highest-weight slots.
+                let mut top4: Vec<(usize, f32)> = acc
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &w)| w > 1e-7)
+                    .map(|(s, &w)| (s, w))
+                    .collect();
+                top4.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                top4.truncate(4);
+
+                // Normalize.
+                let weight_sum: f32 = top4.iter().map(|&(_, w)| w).sum();
+                for lane in 0..4 {
+                    if let Some(&(slot, w)) = top4.get(lane) {
+                        new_slots[lane] = slot as u16;
+                        new_weights[lane] = if weight_sum > 1e-7 {
+                            w / weight_sum
+                        } else {
+                            0.0
+                        };
+                    } else {
+                        new_slots[lane] = 0;
+                        new_weights[lane] = 0.0;
+                    }
+                }
+
+                // Write back.
+                for lane in 0..4 {
+                    let _ =
+                        write_joint_slot(bin, &joints_meta, vertex_index, lane, new_slots[lane]);
+                    let _ =
+                        write_weight_f32(bin, &weights_meta, vertex_index, lane, new_weights[lane]);
+                }
+            }
+        }
+    }
+}
+
+/// Set `skin.skeleton` for every skin to the `mPelvis` node (hips in SL).
+/// Without this, some importers (including the SL viewer) treat the skeleton
+/// root as an identity node and produce incorrect world-space transforms when
+/// evaluating inverse bind matrices.
+///
+/// For skins that don't contain `mPelvis` (e.g. facial rig), the skeleton is
+/// set to the first joint in the skin's joint list, which is the safest fallback.
+fn set_skin_skeleton_to_pelvis(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
+    // Find the mPelvis node index (the renamed hips bone).
+    // humanoid_bone_nodes keys are VRM bone names (e.g. "hips"), not SL names.
+    let pelvis_index = humanoid_bone_nodes.get("hips").copied();
+
+    let skins = match json["skins"].as_array_mut() {
+        Some(s) => s,
+        None => return,
+    };
+
+    for skin in skins.iter_mut() {
+        let joints: Vec<usize> = skin["joints"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if let Some(pelvis_idx) = pelvis_index {
+            if joints.contains(&pelvis_idx) {
+                skin["skeleton"] = Value::Number(pelvis_idx.into());
+                continue;
+            }
+        }
+
+        // Fallback: use the first joint as skeleton root.
+        if let Some(&first) = joints.first() {
+            skin["skeleton"] = Value::Number(first.into());
         }
     }
 }
@@ -1993,7 +2312,9 @@ fn remove_unsupported_features(json: &mut Value) {
     }
 }
 
-/// Apply uniform scale to scene root nodes.
+/// Apply uniform scale to the first scene's root nodes by setting the scale
+/// property. glTF skinning propagates root scale to both mesh vertices and
+/// joint world transforms uniformly, so this is the correct place to apply it.
 fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
     let root_node_indices = json
         .get("scenes")
@@ -2032,6 +2353,94 @@ fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
                 let result = existing * scale_factor;
                 node["scale"] = serde_json::json!([result.x, result.y, result.z]);
             }
+        }
+    }
+}
+
+/// Apply uniform scale by baking it into local translations/matrices for all
+/// nodes in the first scene hierarchy.
+#[allow(dead_code)]
+fn apply_uniform_scale_to_scene_translations(json: &mut Value, scale_factor: f32) {
+    if !scale_factor.is_finite() || (scale_factor - 1.0).abs() <= 1e-6 {
+        return;
+    }
+
+    let root_node_indices = json
+        .get("scenes")
+        .and_then(Value::as_array)
+        .and_then(|scenes| scenes.first())
+        .and_then(|scene| scene.get("nodes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    if root_node_indices.is_empty() {
+        return;
+    }
+
+    let child_map: Vec<Vec<usize>> = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .map(|node| {
+                    node.get("children")
+                        .and_then(Value::as_array)
+                        .map(|children| {
+                            children
+                                .iter()
+                                .filter_map(|value| value.as_u64().map(|index| index as usize))
+                                .collect::<Vec<usize>>()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<Vec<usize>>>()
+        })
+        .unwrap_or_default();
+
+    let mut stack: Vec<usize> = root_node_indices
+        .into_iter()
+        .filter_map(|value| value.as_u64().map(|index| index as usize))
+        .collect();
+    let mut visited = HashSet::<usize>::new();
+
+    if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
+        while let Some(node_index) = stack.pop() {
+            if !visited.insert(node_index) {
+                continue;
+            }
+
+            if let Some(node) = nodes.get_mut(node_index) {
+                scale_node_translation(node, scale_factor);
+            }
+
+            if let Some(children) = child_map.get(node_index) {
+                for &child in children {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+}
+
+fn scale_node_translation(node: &mut Value, scale_factor: f32) {
+    if let Some(matrix) = node.get_mut("matrix").and_then(Value::as_array_mut)
+        && matrix.len() == 16
+    {
+        for index in [12usize, 13, 14] {
+            let current = matrix[index].as_f64().unwrap_or(0.0) as f32;
+            matrix[index] = Value::from(current * scale_factor);
+        }
+        return;
+    }
+
+    if let Some(translation) = node.get_mut("translation").and_then(Value::as_array_mut)
+        && translation.len() == 3
+    {
+        for value in translation {
+            let current = value.as_f64().unwrap_or(0.0) as f32;
+            *value = Value::from(current * scale_factor);
         }
     }
 }

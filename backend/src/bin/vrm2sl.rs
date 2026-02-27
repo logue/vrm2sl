@@ -22,7 +22,7 @@ fn run() -> Result<()> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: vrm2sl <input.vrm> <output.gdb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
+            "Usage: vrm2sl <input.vrm> <output.glb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
         );
         process::exit(2);
     }

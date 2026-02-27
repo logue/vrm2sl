@@ -1,6 +1,6 @@
 [package]
 name = "vrm2sl-tauri"
-version = "0.0.0"
+version = "0.8.0"
 default-run = "vrm2sl-tauri"
 authors = ["Logue <logue@hotmail.co.jp>"]
 edition = "2024"

@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-vue3-app",
-  "mainBinaryName": "Tauri Vue3 App",
-  "version": "0.0.0",
-  "identifier": "com.tauri.vue3.app",
+  "productName": "vrm2sl",
+  "mainBinaryName": "Vrm2SL",
+  "version": "0.8.0",
+  "identifier": "com.vrm2sl",
   "build": {
     "beforeDevCommand": "pnpm --dir frontend dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "Tauri Vue3 App",
+        "title": "Vrm2SL",
         "width": 1280,
         "height": 720,
         "minWidth": 720,
@@ -29,11 +29,11 @@
     "macOSPrivateApi": false
   },
   "bundle": {
-    "publisher": "Your Name",
+    "publisher": "logue",
     "active": true,
     "category": "Utility",
-    "shortDescription": "Modern desktop application template",
-    "longDescription": "A modern desktop application",
+    "shortDescription": "VRM to Second Life converter desktop application",
+    "longDescription": "Convert VRM avatars to Second Life format with ease",
     "targets": [
       "dmg",
       "msi",
@@ -49,7 +49,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "bundleName": "Tauri Vue3 App",
+      "bundleName": "Vrm2SL",
       "minimumSystemVersion": "11.0"
     },
     "windows": {

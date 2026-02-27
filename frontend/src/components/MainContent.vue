@@ -121,8 +121,8 @@ const pickInputFile = async () => {
 
 const pickOutputFile = async () => {
   const selected = await fs.saveFile({
-    defaultPath: outputPath.value || 'output.gdb',
-    filters: [{ name: 'GDB', extensions: ['gdb', 'glb'] }]
+    defaultPath: outputPath.value || 'output.glb',
+    filters: [{ name: 'GLB', extensions: ['glb'] }]
   });
   if (selected) {
     outputPath.value = selected;
@@ -278,7 +278,7 @@ onBeforeUnmount(() => {
               <v-col cols="12" md="6">
                 <v-text-field
                   v-model="outputPath"
-                  label="出力.gdb"
+                  label="出力.glb"
                   variant="outlined"
                   density="comfortable"
                 />

@@ -7,20 +7,20 @@ VRM to SecondLife Avatar bone converter.
 ## Usage
 
 ```bash
-cargo run --manifest-path backend/Cargo.toml --bin vrm2sl -- input.vrm output.gdb
+cargo run --manifest-path backend/Cargo.toml --bin vrm2sl -- input.vrm output.glb
 ```
 
 or after install/build:
 
 ```bash
 cargo install --path backend --bin vrm2sl
-vrm2sl input.vrm output.gdb
+vrm2sl input.vrm output.glb
 ```
 
 ### Analyze only (no export)
 
 ```bash
-vrm2sl input.vrm output.gdb --analyze-only --report report.json
+vrm2sl input.vrm output.glb --analyze-only --report report.json
 ```
 
 When analysis or conversion completes, a desktop notification is sent (on macOS, via `osascript`).
@@ -67,7 +67,7 @@ From `MainContent` in the UI, you can:
 - Select a VRM file
 - Run analysis (bones/vertices/textures/upload cost estimate)
 - Save/load settings JSON
-- Export `.gdb`
+- Export `.glb`
 
 Desktop notifications are sent when analysis/conversion completes.
 
@@ -84,7 +84,7 @@ Desktop notifications are sent when analysis/conversion completes.
 - Removal of VRM extension references/extras from output JSON chunk
 - Removal of animation and morph target entries
 - Project settings JSON load/save API
-- Output `.gdb` (GLB container) generation
+- Output `.glb` (GLB container) generation
 
 ## Notes
 
