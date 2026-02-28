@@ -152,16 +152,6 @@ const BENTO_HIERARCHY_RELATIONS: [(&str, &str); 33] = [
     ("rightLittleIntermediate", "rightLittleDistal"),
 ];
 
-/// SL-target upper-limb bone names used for A-pose -> T-pose correction.
-const UPPER_LIMB_TARGET_BONES: [&str; 6] = [
-    "mShoulderLeft",
-    "mElbowLeft",
-    "mWristLeft",
-    "mShoulderRight",
-    "mElbowRight",
-    "mWristRight",
-];
-
 /// Conversion options shared by CLI and Tauri IPC entry points.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ConvertOptions {
@@ -839,19 +829,29 @@ fn transform_and_write_glb(
     rename_bones(&mut json, humanoid_bone_nodes);
     ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
     reconstruct_sl_core_hierarchy(&mut json, humanoid_bone_nodes);
-    apply_upper_limb_t_pose_correction(&mut json);
+    // Normalize all SL-mapped bone rotations to identity while preserving
+    // their world-space positions.  Second Life reads bone bind positions from
+    // the inverse-bind-matrix translations and applies its own (identity)
+    // orientations in the SL skeleton; any non-identity rotation baked into
+    // the node hierarchy will therefore cause incorrect deformation.
+    normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
     // Remap weights from unmapped VRM bones (e.g. upperChest, spring bones)
     // to their nearest mapped-SL ancestor so that only valid SL bones remain
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
     // Set skin.skeleton to the hips (mPelvis) node so every importer agrees on
-    // the skeleton root, then regenerate IBMs against the corrected hierarchy.
+    // the skeleton root.
     set_skin_skeleton_to_pelvis(&mut json, humanoid_bone_nodes);
+    // Bake the scale factor directly into geometry (node translations and mesh
+    // vertex POSITION data) instead of setting a non-unit scale on root nodes.
+    // This is the most universally compatible approach for SL: no root-scale
+    // means no ambiguity about whether the renderer applies it before or after
+    // skinning, and IBMs computed below are all in the final scaled space.
+    bake_scale_into_geometry(&mut json, &mut bin, scale_factor)?;
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
-    apply_uniform_scale_to_scene_roots(&mut json, scale_factor);
 
     apply_texture_resize_to_embedded_images(
         &mut json,
@@ -1258,39 +1258,126 @@ fn collect_node_name_set_from_json(json: &Value) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Apply pragmatic A-pose -> T-pose correction to upper-limb bones by
-/// normalizing local rotations to identity on known SL arm joints.
-fn apply_upper_limb_t_pose_correction(json: &mut Value) {
-    let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) else {
-        return;
-    };
+/// Normalize the local rotation of every SL-mapped bone to identity while
+/// preserving the bone's world-space position.
+///
+/// Second Life reads joint bind-positions from the inverse-bind-matrix
+/// (4th column) and then applies its **own** default (identity) orientations
+/// when deforming the mesh. Any non-identity local rotation that was baked
+/// into the glTF node hierarchy will therefore cause incorrect deformation
+/// because the IBM accounts for the rotation but SL does not re-apply it.
+///
+/// The fix: process bones in topological (parent-before-child) order and preserve
+/// each mapped bone's snapshot world-space position while zeroing local rotation.
+/// This keeps bind positions stable and avoids introducing additional translation
+/// offsets that can cause detached heads or twisted lower limbs in SL animations.
+fn normalize_sl_bone_rotations(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
+    // Set of all SL-mapped node indices.
+    let sl_node_indices: HashSet<usize> = BONE_MAP
+        .iter()
+        .chain(BENTO_BONE_MAP.iter())
+        .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
+        .collect();
 
-    for node in nodes {
-        let is_target_upper_limb = node
-            .get("name")
-            .and_then(Value::as_str)
-            .map(|name| UPPER_LIMB_TARGET_BONES.contains(&name))
-            .unwrap_or(false);
+    // Snapshot world matrices from the current (post-reconstruction) hierarchy.
+    let node_locals: Vec<Matrix4<f32>> = json["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
+        .unwrap_or_default();
+    let parent_map = collect_parent_index_map_from_json(json);
+    let node_worlds_snapshot = compute_node_world_matrices(&node_locals, &parent_map);
 
-        if !is_target_upper_limb {
+    let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    // Compute topological order (parents before children) using BFS from roots.
+    let mut topo_order: Vec<usize> = Vec::with_capacity(node_count);
+    {
+        let mut child_count = vec![0usize; node_count];
+        for (&child, &parent) in &parent_map {
+            let _ = parent;
+            child_count[child] += 1; // just mark as having a parent
+        }
+        // roots = nodes with no parent
+        let mut queue: std::collections::VecDeque<usize> = (0..node_count)
+            .filter(|&i| !parent_map.contains_key(&i))
+            .collect();
+        while let Some(idx) = queue.pop_front() {
+            topo_order.push(idx);
+            if let Some(children) = json["nodes"][idx].get("children").and_then(Value::as_array) {
+                for child in children {
+                    if let Some(c) = child.as_u64().map(|v| v as usize) {
+                        queue.push_back(c);
+                    }
+                }
+            }
+        }
+    }
+
+    // Effective world positions: start as snapshot, updated as each bone is processed.
+    // This lets children use the corrected parent world position when computing
+    // their own local translations.
+    let mut effective_world_t: Vec<Vector3<f32>> = node_worlds_snapshot
+        .iter()
+        .map(|m| Vector3::new(m[(0, 3)], m[(1, 3)], m[(2, 3)]))
+        .collect();
+    // Pad if snapshot is shorter than node_count.
+    while effective_world_t.len() < node_count {
+        effective_world_t.push(Vector3::zeros());
+    }
+
+    for &node_idx in &topo_order {
+        if !sl_node_indices.contains(&node_idx) {
+            // Not an SL bone: keep effective world as snapshot (already set).
             continue;
         }
 
-        if let Some(object) = node.as_object_mut() {
-            object.remove("matrix");
-            object.insert(
+        // Snapshot world position of THIS bone (original bind pose target).
+        let snapshot_t = match node_worlds_snapshot.get(node_idx) {
+            Some(m) => Vector3::new(m[(0, 3)], m[(1, 3)], m[(2, 3)]),
+            None => continue,
+        };
+
+        // Effective world position of the PARENT (already processed).
+        let parent_effective_t = match parent_map.get(&node_idx) {
+            Some(&parent_idx) => effective_world_t[parent_idx],
+            None => Vector3::zeros(),
+        };
+
+        // Keep each mapped bone at its snapshot world position.
+        let target_t = snapshot_t;
+
+        // Local translation = target_world - parent_effective_world.
+        let local_t = target_t - parent_effective_t;
+
+        // Record this bone's effective world for its children.
+        effective_world_t[node_idx] = parent_effective_t + local_t; // == target_t
+
+        // Preserve the existing scale (default to [1,1,1]).
+        let scale = json["nodes"][node_idx]
+            .get("scale")
+            .and_then(Value::as_array)
+            .and_then(|a| {
+                let sx = a.first().and_then(Value::as_f64)? as f32;
+                let sy = a.get(1).and_then(Value::as_f64)? as f32;
+                let sz = a.get(2).and_then(Value::as_f64)? as f32;
+                Some([sx, sy, sz])
+            })
+            .unwrap_or([1.0, 1.0, 1.0]);
+
+        if let Some(obj) = json["nodes"][node_idx].as_object_mut() {
+            obj.remove("matrix");
+            obj.insert(
+                "translation".to_string(),
+                serde_json::json!([local_t.x, local_t.y, local_t.z]),
+            );
+            obj.insert(
                 "rotation".to_string(),
                 serde_json::json!([0.0, 0.0, 0.0, 1.0]),
             );
-            if !object.contains_key("translation") {
-                object.insert(
-                    "translation".to_string(),
-                    serde_json::json!([0.0, 0.0, 0.0]),
-                );
-            }
-            if !object.contains_key("scale") {
-                object.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
-            }
+            obj.insert(
+                "scale".to_string(),
+                serde_json::json!([scale[0], scale[1], scale[2]]),
+            );
         }
     }
 }
@@ -2315,6 +2402,9 @@ fn remove_unsupported_features(json: &mut Value) {
 /// Apply uniform scale to the first scene's root nodes by setting the scale
 /// property. glTF skinning propagates root scale to both mesh vertices and
 /// joint world transforms uniformly, so this is the correct place to apply it.
+/// Apply uniform scale by setting a scale property on scene root nodes.
+/// Replaced by `bake_scale_into_geometry` for better SL compatibility.
+#[allow(dead_code)]
 fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
     let root_node_indices = json
         .get("scenes")
@@ -2328,11 +2418,33 @@ fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
         return;
     };
 
+    // Collect skinned mesh node indices (nodes that reference a skin).
+    // Per glTF spec, the node transform of a skinned mesh is supposed to be
+    // ignored by renderers. However the SL viewer does apply the mesh-node
+    // transform to already-skinned vertices, effectively double-scaling them.
+    // We therefore skip skinned nodes and only apply scale to the skeleton root.
+    let skinned_node_indices: HashSet<usize> = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| n.get("skin").map(|_| i))
+                .collect()
+        })
+        .unwrap_or_default();
+
     if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
         for node_index in root_node_indices
             .into_iter()
             .filter_map(|index| index.as_u64().map(|n| n as usize))
         {
+            // Skip skinned mesh nodes to prevent double-scaling.
+            if skinned_node_indices.contains(&node_index) {
+                continue;
+            }
+
             if let Some(node) = nodes.get_mut(node_index) {
                 let existing = node
                     .get("scale")
@@ -2355,6 +2467,130 @@ fn apply_uniform_scale_to_scene_roots(json: &mut Value, scale_factor: f32) {
             }
         }
     }
+}
+
+/// Bake a uniform scale factor into geometry rather than storing it as a node
+/// scale property.  This is the most universally compatible form for SL uploads
+/// because some SL viewer versions apply the mesh-node transform to skinned
+/// vertices (contrary to the glTF spec), which causes double-scaling when the
+/// root is also scaled.
+///
+/// Two kinds of data are scaled:
+/// 1. **Node translations**: every node's local translation is multiplied by
+///    `scale_factor`.  Node scale properties are NOT modified (they would
+///    compound multiplicatively with the translation baking and cause drift).
+/// 2. **Mesh vertex positions**: the binary data for every unique POSITION
+///    accessor is read and each XYZ f32 triple is multiplied by `scale_factor`.
+///    NORMAL / TANGENT vectors are directions and must not be scaled.
+///
+/// After calling this function the scene no longer needs any root-level scale;
+/// call `regenerate_inverse_bind_matrices` afterwards so IBMs match.
+fn bake_scale_into_geometry(json: &mut Value, bin: &mut [u8], scale_factor: f32) -> Result<()> {
+    if !scale_factor.is_finite() || (scale_factor - 1.0).abs() <= 1e-6 {
+        return Ok(());
+    }
+
+    // --- 1. Scale all node translations ---
+    let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    for i in 0..node_count {
+        // Handle TRS form.
+        if let Some(t) = json["nodes"][i]
+            .get_mut("translation")
+            .and_then(Value::as_array_mut)
+        {
+            for component in t.iter_mut() {
+                if let Some(v) = component.as_f64() {
+                    *component = Value::from(v * scale_factor as f64);
+                }
+            }
+        }
+        // Handle full matrix form (column-major, last column = translation).
+        if let Some(m) = json["nodes"][i]
+            .get_mut("matrix")
+            .and_then(Value::as_array_mut)
+        {
+            if m.len() == 16 {
+                for col_idx in [12usize, 13, 14] {
+                    if let Some(v) = m[col_idx].as_f64() {
+                        m[col_idx] = Value::from(v * scale_factor as f64);
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 2. Scale mesh vertex POSITION data in the binary buffer ---
+    // Collect unique POSITION accessor indices first to avoid double-scaling.
+    let mut pos_accessor_indices: HashSet<usize> = HashSet::new();
+    if let Some(meshes) = json["meshes"].as_array() {
+        for mesh in meshes {
+            if let Some(primitives) = mesh["primitives"].as_array() {
+                for primitive in primitives {
+                    if let Some(idx) = primitive
+                        .pointer("/attributes/POSITION")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize)
+                    {
+                        pos_accessor_indices.insert(idx);
+                    }
+                    // Also scale morph target positions if present.
+                    if let Some(targets) = primitive["targets"].as_array() {
+                        for target in targets {
+                            if let Some(idx) = target
+                                .get("POSITION")
+                                .and_then(Value::as_u64)
+                                .map(|v| v as usize)
+                            {
+                                pos_accessor_indices.insert(idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let accessors = json["accessors"].as_array().cloned().unwrap_or_default();
+    let buffer_views = json["bufferViews"].as_array().cloned().unwrap_or_default();
+
+    for acc_idx in pos_accessor_indices {
+        let Some(accessor) = accessors.get(acc_idx) else {
+            continue;
+        };
+        if accessor["componentType"].as_u64().unwrap_or(0) != 5126 {
+            continue; // Only handle FLOAT
+        }
+        if accessor["type"].as_str().unwrap_or("") != "VEC3" {
+            continue;
+        }
+        let count = accessor["count"].as_u64().unwrap_or(0) as usize;
+        let bv_idx = match accessor["bufferView"].as_u64().map(|v| v as usize) {
+            Some(i) => i,
+            None => continue,
+        };
+        let Some(bv) = buffer_views.get(bv_idx) else {
+            continue;
+        };
+        let view_offset = bv["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let acc_offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let stride = bv["byteStride"].as_u64().map(|v| v as usize).unwrap_or(12); // VEC3 float = 12 bytes
+        let base = view_offset + acc_offset;
+
+        for i in 0..count {
+            let offset = base + i * stride;
+            if offset + 12 > bin.len() {
+                break;
+            }
+            for component in 0..3usize {
+                let byte_pos = offset + component * 4;
+                let v = f32::from_le_bytes(bin[byte_pos..byte_pos + 4].try_into().unwrap());
+                let scaled = v * scale_factor;
+                bin[byte_pos..byte_pos + 4].copy_from_slice(&scaled.to_le_bytes());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Apply uniform scale by baking it into local translations/matrices for all
@@ -2621,7 +2857,8 @@ mod tests {
             ]
         });
 
-        apply_upper_limb_t_pose_correction(&mut input_json);
+        let humanoid = HashMap::from([("leftUpperArm".to_string(), 0usize)]);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid);
         let rotation = input_json
             .pointer("/nodes/0/rotation")
             .and_then(Value::as_array)
@@ -2637,6 +2874,86 @@ mod tests {
                 Value::from(1.0)
             ]
         );
+    }
+
+    #[test]
+    fn given_spine_with_world_xz_offsets_when_normalizing_then_world_positions_are_preserved() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mPelvis",
+                    "translation": [1.0, 0.0, 2.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "children": [1]
+                },
+                {
+                    "name": "mTorso",
+                    "translation": [0.4, 1.0, 0.3],
+                    "rotation": [0.0, 0.0, 0.2, 0.98],
+                    "children": [2]
+                },
+                {
+                    "name": "mHead",
+                    "translation": [0.2, 0.9, 0.1],
+                    "rotation": [0.0, 0.1, 0.0, 0.99]
+                }
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("hips".to_string(), 0usize),
+            ("spine".to_string(), 1usize),
+            ("head".to_string(), 2usize),
+        ]);
+
+        let before_locals = json["nodes"]
+            .as_array()
+            .expect("nodes should be array")
+            .iter()
+            .map(node_to_local_matrix)
+            .collect::<Vec<_>>();
+        let before_world =
+            compute_node_world_matrices(&before_locals, &collect_parent_index_map_from_json(&json));
+
+        normalize_sl_bone_rotations(&mut json, &humanoid);
+
+        let after_locals = json["nodes"]
+            .as_array()
+            .expect("nodes should be array")
+            .iter()
+            .map(node_to_local_matrix)
+            .collect::<Vec<_>>();
+        let after_world =
+            compute_node_world_matrices(&after_locals, &collect_parent_index_map_from_json(&json));
+
+        for node_index in [0usize, 1usize, 2usize] {
+            let bt = Vector3::new(
+                before_world[node_index][(0, 3)],
+                before_world[node_index][(1, 3)],
+                before_world[node_index][(2, 3)],
+            );
+            let at = Vector3::new(
+                after_world[node_index][(0, 3)],
+                after_world[node_index][(1, 3)],
+                after_world[node_index][(2, 3)],
+            );
+            assert!((bt - at).norm() < 1e-4);
+
+            let rotation = json["nodes"][node_index]
+                .get("rotation")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(
+                rotation,
+                vec![
+                    Value::from(0.0),
+                    Value::from(0.0),
+                    Value::from(0.0),
+                    Value::from(1.0)
+                ]
+            );
+        }
     }
 
     #[test]

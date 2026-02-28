@@ -32,3 +32,4 @@ backend/gen/
 
 .DS_Store
 frontend/src/Meta.ts
+output.gdb

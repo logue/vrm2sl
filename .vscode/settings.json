@@ -1,0 +1,8 @@
+{
+  "chat.tools.terminal.autoApprove": {
+    "/^python3 /tmp/diag2\\.py 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
+}
