@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::Cursor,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -244,6 +244,48 @@ pub struct ConversionReport {
     pub output_texture_over_1024_count: usize,
     pub fee_estimate: UploadFeeEstimate,
     pub issues: Vec<ValidationIssue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MeshSkinLinkDiagnostic {
+    node_index: usize,
+    node_name: Option<String>,
+    skin_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct JointDiagnostic {
+    slot: usize,
+    node_index: usize,
+    node_name: Option<String>,
+    parent_index: Option<usize>,
+    parent_name: Option<String>,
+    local_translation: [f32; 3],
+    local_rotation: [f32; 4],
+    world_translation: [f32; 3],
+    ibm_translation: Option<[f32; 3]>,
+    bind_world_translation: Option<[f32; 3]>,
+    world_bind_distance: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkinDiagnostic {
+    skin_index: usize,
+    skeleton_index: Option<usize>,
+    skeleton_name: Option<String>,
+    joints_count: usize,
+    inverse_bind_accessor: Option<usize>,
+    joints: Vec<JointDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConversionDiagnosticLog {
+    output_path: String,
+    scale_factor: f32,
+    node_count: usize,
+    skin_count: usize,
+    mesh_nodes_with_skin: Vec<MeshSkinLinkDiagnostic>,
+    skins: Vec<SkinDiagnostic>,
 }
 
 /// Generate a reusable markdown checklist for final manual validation flow.
@@ -496,6 +538,9 @@ pub fn convert_vrm_to_gdb(
         options.texture_resize_method,
     )?;
 
+    let diagnostic_path = diagnostic_log_path_for_output(output_path);
+    write_conversion_diagnostic_log(output_path, &diagnostic_path, computed_scale_factor)?;
+
     let output_texture_infos = collect_output_texture_infos(output_path)?;
     let output_texture_over_1024_count = output_texture_infos
         .iter()
@@ -507,6 +552,16 @@ pub fn convert_vrm_to_gdb(
         .iter()
         .filter(|image| image.width > 1024 || image.height > 1024)
         .count();
+
+    let mut issues = analysis.issues;
+    issues.push(ValidationIssue {
+        severity: Severity::Info,
+        code: "DIAGNOSTIC_LOG_WRITTEN".to_string(),
+        message: format!(
+            "[INFO] Conversion diagnostic log written: {}",
+            diagnostic_path.display()
+        ),
+    });
 
     Ok(ConversionReport {
         model_name: analysis.model_name,
@@ -524,8 +579,185 @@ pub fn convert_vrm_to_gdb(
         output_texture_infos,
         output_texture_over_1024_count,
         fee_estimate: analysis.fee_estimate,
-        issues: analysis.issues,
+        issues,
     })
+}
+
+fn diagnostic_log_path_for_output(output_path: &Path) -> PathBuf {
+    output_path.with_extension("diagnostic.json")
+}
+
+fn write_conversion_diagnostic_log(
+    output_path: &Path,
+    diagnostic_path: &Path,
+    scale_factor: f32,
+) -> Result<()> {
+    let bytes = fs::read(output_path)
+        .with_context(|| format!("failed to read output file: {}", output_path.display()))?;
+    let glb = Glb::from_slice(&bytes).context("output file is not a GLB container")?;
+    let json: Value = serde_json::from_slice(glb.json.as_ref())
+        .context("failed to parse glTF JSON from output GLB")?;
+    let bin = glb.bin.map(|chunk| chunk.into_owned()).unwrap_or_default();
+
+    let nodes = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let parent_map = collect_parent_index_map_from_json(&json);
+    let locals: Vec<Matrix4<f32>> = nodes.iter().map(node_to_local_matrix).collect();
+    let worlds = compute_node_world_matrices(&locals, &parent_map);
+
+    let mesh_nodes_with_skin = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.get("mesh").is_some())
+        .map(|(node_index, node)| MeshSkinLinkDiagnostic {
+            node_index,
+            node_name: node
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            skin_index: node.get("skin").and_then(Value::as_u64).map(|v| v as usize),
+        })
+        .collect::<Vec<_>>();
+
+    let mut skins_out = Vec::<SkinDiagnostic>::new();
+    if let Some(skins) = json.get("skins").and_then(Value::as_array) {
+        for (skin_index, skin) in skins.iter().enumerate() {
+            let skeleton_index = skin
+                .get("skeleton")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            let skeleton_name = skeleton_index
+                .and_then(|index| nodes.get(index))
+                .and_then(|node| node.get("name"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+
+            let inverse_bind_accessor = skin
+                .get("inverseBindMatrices")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            let inverse_bind_meta = inverse_bind_accessor
+                .and_then(|accessor_index| accessor_meta(&json, accessor_index))
+                .filter(|meta| meta.component_type == 5126 && meta.accessor_type == "MAT4");
+
+            let joints = skin
+                .get("joints")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut joint_out = Vec::<JointDiagnostic>::new();
+            for (slot, joint_value) in joints.iter().enumerate() {
+                let Some(node_index) = joint_value.as_u64().map(|v| v as usize) else {
+                    continue;
+                };
+
+                let node = nodes.get(node_index);
+                let node_name = node
+                    .and_then(|n| n.get("name"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+
+                let parent_index = parent_map.get(&node_index).copied();
+                let parent_name = parent_index
+                    .and_then(|index| nodes.get(index))
+                    .and_then(|n| n.get("name"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+
+                let local = locals
+                    .get(node_index)
+                    .copied()
+                    .unwrap_or_else(Matrix4::<f32>::identity);
+                let world = worlds
+                    .get(node_index)
+                    .copied()
+                    .unwrap_or_else(Matrix4::<f32>::identity);
+
+                let local_translation = [local[(0, 3)], local[(1, 3)], local[(2, 3)]];
+                let world_translation = [world[(0, 3)], world[(1, 3)], world[(2, 3)]];
+                let local_rotation = node
+                    .and_then(|n| n.get("rotation"))
+                    .and_then(Value::as_array)
+                    .filter(|r| r.len() == 4)
+                    .map(|r| {
+                        [
+                            r[0].as_f64().unwrap_or(0.0) as f32,
+                            r[1].as_f64().unwrap_or(0.0) as f32,
+                            r[2].as_f64().unwrap_or(0.0) as f32,
+                            r[3].as_f64().unwrap_or(1.0) as f32,
+                        ]
+                    })
+                    .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+
+                let ibm_matrix = inverse_bind_meta
+                    .as_ref()
+                    .and_then(|meta| read_mat4_from_accessor(&bin, meta, slot));
+                let ibm_translation = ibm_matrix
+                    .as_ref()
+                    .map(|matrix| [matrix[(0, 3)], matrix[(1, 3)], matrix[(2, 3)]]);
+                let bind_world_translation = ibm_matrix
+                    .as_ref()
+                    .and_then(|matrix| matrix.try_inverse())
+                    .map(|matrix| [matrix[(0, 3)], matrix[(1, 3)], matrix[(2, 3)]]);
+                let world_bind_distance = bind_world_translation.map(|bind| {
+                    let world_v = Vector3::new(
+                        world_translation[0],
+                        world_translation[1],
+                        world_translation[2],
+                    );
+                    let bind_v = Vector3::new(bind[0], bind[1], bind[2]);
+                    (world_v - bind_v).norm()
+                });
+
+                joint_out.push(JointDiagnostic {
+                    slot,
+                    node_index,
+                    node_name,
+                    parent_index,
+                    parent_name,
+                    local_translation,
+                    local_rotation,
+                    world_translation,
+                    ibm_translation,
+                    bind_world_translation,
+                    world_bind_distance,
+                });
+            }
+
+            skins_out.push(SkinDiagnostic {
+                skin_index,
+                skeleton_index,
+                skeleton_name,
+                joints_count: joints.len(),
+                inverse_bind_accessor,
+                joints: joint_out,
+            });
+        }
+    }
+
+    let diagnostic = ConversionDiagnosticLog {
+        output_path: output_path.display().to_string(),
+        scale_factor,
+        node_count: nodes.len(),
+        skin_count: skins_out.len(),
+        mesh_nodes_with_skin,
+        skins: skins_out,
+    };
+
+    let json = serde_json::to_vec_pretty(&diagnostic)
+        .context("failed to serialize conversion diagnostic JSON")?;
+    fs::write(diagnostic_path, json).with_context(|| {
+        format!(
+            "failed to write conversion diagnostic log: {}",
+            diagnostic_path.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 /// Collect texture dimensions from an exported GLB output file.
@@ -840,6 +1072,12 @@ fn transform_and_write_glb(
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    // Promote mPelvis to the scene root, removing any intermediate "Root" /
+    // empty wrapper nodes that VRM files typically insert above the skeleton.
+    // The SL viewer and many glTF runtimes re-apply the scene-root node's
+    // transform on top of every joint's world matrix, so a non-identity
+    // intermediate root will offset every joint by that extra transform.
+    promote_pelvis_to_scene_root(&mut json, humanoid_bone_nodes);
     // Set skin.skeleton to the hips (mPelvis) node so every importer agrees on
     // the skeleton root.
     set_skin_skeleton_to_pelvis(&mut json, humanoid_bone_nodes);
@@ -1562,13 +1800,188 @@ fn remap_unmapped_bone_weights(
     }
 }
 
+/// Promote `mPelvis` to become a direct child of the scene (scene root),
+/// removing any intermediate wrapper nodes (e.g. the "Root" empty that VRM
+/// files typically insert above the skeleton).
+///
+/// VRM models commonly have the structure:
+///   scene → Root (node 0, sometimes with a non-identity transform)
+///               └─ Armature / J_Root
+///                      └─ mPelvis → …
+///
+/// When a glTF skin's inverse-bind-matrices are computed relative to the world
+/// origin, any non-identity ancestor transform above mPelvis will cause every
+/// joint's world matrix to be shifted/rotated by that extra transform.  In the
+/// Second Life viewer this manifests as deformed or offset limbs.
+///
+/// This function:
+/// 1. Finds all node indices that are ancestors of `mPelvis` but are NOT
+///    themselves mapped SL bones.
+/// 2. Removes those ancestor indices from the scene's node list.
+/// 3. Removes mPelvis from its parent's children list.
+/// 4. Adds mPelvis directly to the scene's node list.
+/// 5. Bakes each removed ancestor's accumulated world transform into the
+///    local translation of mPelvis so that the bind-pose world position of
+///    mPelvis is unchanged.
+fn promote_pelvis_to_scene_root(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
+    let Some(pelvis_index) = humanoid_bone_nodes.get("hips").copied() else {
+        return;
+    };
+
+    // Build a name→index map and the child→parent map from the current JSON.
+    let parent_map = collect_parent_index_map_from_json(json);
+
+    // Walk upward from mPelvis to find wrapper ancestors.
+    // Stop as soon as we hit a node that has no parent (i.e. already at scene
+    // level) so we only strip the in-between layers.
+    let mut ancestors_to_remove: Vec<usize> = Vec::new();
+    let mut current = pelvis_index;
+    while let Some(&parent_idx) = parent_map.get(&current) {
+        // Only strip nodes that are not part of the SL skeleton.
+        let parent_name = json["nodes"][parent_idx]
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let is_sl_bone = parent_name.starts_with('m')
+            || humanoid_bone_nodes.values().any(|&idx| idx == parent_idx);
+        if is_sl_bone {
+            break;
+        }
+        ancestors_to_remove.push(parent_idx);
+        current = parent_idx;
+    }
+
+    if ancestors_to_remove.is_empty() {
+        // mPelvis is already a scene root or has no unwanted ancestors.
+        return;
+    }
+
+    // Compute the accumulated world transform of the outermost ancestor to
+    // remove, so we can bake its translation into mPelvis's local translation.
+    let node_locals: Vec<Matrix4<f32>> = json["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
+        .unwrap_or_default();
+    let world_matrices = compute_node_world_matrices(&node_locals, &parent_map);
+
+    // The outermost ancestor to remove is the last element (we walked up).
+    let outermost_idx = *ancestors_to_remove.last().unwrap();
+    let _outermost_world = world_matrices
+        .get(outermost_idx)
+        .copied()
+        .unwrap_or_else(Matrix4::<f32>::identity);
+
+    // Compute the current world matrix of mPelvis and keep it unchanged.
+    let pelvis_world = world_matrices
+        .get(pelvis_index)
+        .copied()
+        .unwrap_or_else(Matrix4::<f32>::identity);
+
+    // New local matrix for mPelvis when it has no parent (= its world matrix).
+    // We only bake the translation because rotation is already identity after
+    // normalize_sl_bone_rotations, and scale is handled by bake_scale_into_geometry.
+    let new_local_t = Vector3::new(
+        pelvis_world[(0, 3)],
+        pelvis_world[(1, 3)],
+        pelvis_world[(2, 3)],
+    );
+
+    // 1. Remove mPelvis from its direct parent's children list.
+    let direct_parent = parent_map.get(&pelvis_index).copied();
+    if let Some(dp) = direct_parent {
+        if let Some(dp_node) = json["nodes"][dp].as_object_mut() {
+            if let Some(Value::Array(children)) = dp_node.get_mut("children") {
+                children.retain(|v| v.as_u64().map(|n| n as usize) != Some(pelvis_index));
+            }
+        }
+    }
+
+    // 2. Update mPelvis local translation to its world position (no parent anymore).
+    if let Some(node_obj) = json["nodes"][pelvis_index].as_object_mut() {
+        node_obj.remove("matrix");
+        node_obj.insert(
+            "translation".to_string(),
+            serde_json::json!([new_local_t.x, new_local_t.y, new_local_t.z]),
+        );
+        // rotation is already [0,0,0,1] at this point; keep it.
+        if !node_obj.contains_key("rotation") {
+            node_obj.insert(
+                "rotation".to_string(),
+                serde_json::json!([0.0, 0.0, 0.0, 1.0]),
+            );
+        }
+    }
+
+    // 3. Remove wrapper ancestor node indices from the scene's node list and
+    //    add mPelvis directly.
+    let ancestors_set: HashSet<usize> = ancestors_to_remove.iter().copied().collect();
+    if let Some(scene) = json
+        .get_mut("scenes")
+        .and_then(Value::as_array_mut)
+        .and_then(|s| s.first_mut())
+    {
+        if let Some(Value::Array(scene_nodes)) = scene.get_mut("nodes") {
+            scene_nodes.retain(|v| {
+                v.as_u64()
+                    .map(|n| !ancestors_set.contains(&(n as usize)))
+                    .unwrap_or(true)
+            });
+            let pelvis_val = Value::from(pelvis_index as u64);
+            if !scene_nodes.iter().any(|v| v == &pelvis_val) {
+                scene_nodes.push(pelvis_val);
+            }
+        }
+    }
+
+    // 4. Also move any non-skeleton root-level nodes that were children of the
+    //    removed wrapper to the scene node list so we don't orphan meshes.
+    //    (Mesh nodes like Body/Face/Hair also hang under the same Root wrapper.)
+    let mut nodes_to_promote: Vec<usize> = Vec::new();
+    for &ancestor_idx in &ancestors_to_remove {
+        if let Some(Value::Array(children)) = json["nodes"][ancestor_idx].get("children") {
+            for child_val in children.clone() {
+                if let Some(child_idx) = child_val.as_u64().map(|n| n as usize) {
+                    if child_idx != pelvis_index && !ancestors_set.contains(&child_idx) {
+                        nodes_to_promote.push(child_idx);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(scene) = json
+        .get_mut("scenes")
+        .and_then(Value::as_array_mut)
+        .and_then(|s| s.first_mut())
+    {
+        if let Some(Value::Array(scene_nodes)) = scene.get_mut("nodes") {
+            for promote_idx in nodes_to_promote {
+                let val = Value::from(promote_idx as u64);
+                if !scene_nodes.iter().any(|v| v == &val) {
+                    scene_nodes.push(val);
+                }
+            }
+        }
+    }
+}
+
 /// Set `skin.skeleton` for every skin to the `mPelvis` node (hips in SL).
 /// Without this, some importers (including the SL viewer) treat the skeleton
 /// root as an identity node and produce incorrect world-space transforms when
 /// evaluating inverse bind matrices.
 ///
-/// For skins that don't contain `mPelvis` (e.g. facial rig), the skeleton is
-/// set to the first joint in the skin's joint list, which is the safest fallback.
+/// The glTF spec defines `skin.skeleton` as "the index of the node used as a
+/// skeleton root."  It does NOT require the skeleton root to be listed in the
+/// skin's `joints` array.  Setting it to `mPelvis` for ALL skins — even those
+/// whose joints are limited to head/eye bones — ensures that every viewer
+/// (including the SL viewer) starts joint-world-transform traversal from the
+/// correct scene-root node instead of from the first joint's local position.
+///
+/// Without this fix, a Face/Hair skin whose first joint is `mHead` would have
+/// `skeleton: mHead`, and viewers that start traversal from `skeleton` would
+/// compute `mHead`'s world matrix using only its local translation (≈ 0.09 m)
+/// rather than the full parent chain through `mPelvis` (≈ 1.73 m), causing
+/// the head mesh to appear near the avatar's feet.
 fn set_skin_skeleton_to_pelvis(json: &mut Value, humanoid_bone_nodes: &HashMap<String, usize>) {
     // Find the mPelvis node index (the renamed hips bone).
     // humanoid_bone_nodes keys are VRM bone names (e.g. "hips"), not SL names.
@@ -1580,6 +1993,16 @@ fn set_skin_skeleton_to_pelvis(json: &mut Value, humanoid_bone_nodes: &HashMap<S
     };
 
     for skin in skins.iter_mut() {
+        // Always set skeleton to mPelvis when available, even when mPelvis is
+        // not listed in this skin's joints array.  glTF allows the skeleton
+        // root to be an ancestor of all joints rather than one of the joints
+        // themselves, and this is the correct value for SL-style rigs.
+        if let Some(pelvis_idx) = pelvis_index {
+            skin["skeleton"] = Value::Number(pelvis_idx.into());
+            continue;
+        }
+
+        // Fallback (no hips bone found): use the first joint as skeleton root.
         let joints: Vec<usize> = skin["joints"]
             .as_array()
             .map(|arr| {
@@ -1589,14 +2012,6 @@ fn set_skin_skeleton_to_pelvis(json: &mut Value, humanoid_bone_nodes: &HashMap<S
             })
             .unwrap_or_default();
 
-        if let Some(pelvis_idx) = pelvis_index {
-            if joints.contains(&pelvis_idx) {
-                skin["skeleton"] = Value::Number(pelvis_idx.into());
-                continue;
-            }
-        }
-
-        // Fallback: use the first joint as skeleton root.
         if let Some(&first) = joints.first() {
             skin["skeleton"] = Value::Number(first.into());
         }
@@ -1843,6 +2258,29 @@ fn write_mat4_f32_le(bin: &mut [u8], offset: usize, matrix: &Matrix4<f32>) {
         bin[cursor..end].copy_from_slice(&bytes);
         cursor = end;
     }
+}
+
+fn read_mat4_from_accessor(bin: &[u8], meta: &AccessorMeta, index: usize) -> Option<Matrix4<f32>> {
+    if meta.accessor_type != "MAT4" || meta.component_type != 5126 {
+        return None;
+    }
+    if index >= meta.count {
+        return None;
+    }
+
+    let offset = meta.base_offset + index * meta.stride;
+    if offset + 64 > bin.len() {
+        return None;
+    }
+
+    let mut values = [0.0f32; 16];
+    for (i, value) in values.iter_mut().enumerate() {
+        let byte_offset = offset + i * 4;
+        let bytes = bin.get(byte_offset..byte_offset + 4)?;
+        *value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    }
+
+    Some(Matrix4::from_column_slice(&values))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3175,5 +3613,67 @@ mod tests {
             .and_then(Value::as_u64)
             .unwrap_or(0);
         assert_eq!(ibm_count, 2);
+    }
+
+    #[test]
+    fn given_root_wrapper_when_promoting_pelvis_then_pelvis_parent_is_removed() {
+        // VRM files typically have: scene → Root(node 0) → mPelvis(node 1)
+        // After promotion mPelvis should appear directly in scene nodes and
+        // have no parent; the Root node should be gone from the scene list.
+        let mut json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "Root",
+                    "translation": [0.0, 0.0, 0.0],
+                    "children": [1, 2]
+                },
+                {
+                    "name": "mPelvis",
+                    "translation": [0.0, 1.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "children": []
+                },
+                {
+                    "name": "Body",
+                    "translation": [0.0, 0.0, 0.0],
+                    "skin": 0
+                }
+            ],
+            "scenes": [
+                {"nodes": [0]}
+            ]
+        });
+
+        let humanoid = HashMap::from([("hips".to_string(), 1usize)]);
+        promote_pelvis_to_scene_root(&mut json, &humanoid);
+
+        // mPelvis (index 1) should be in scene nodes.
+        let scene_nodes = json
+            .pointer("/scenes/0/nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            scene_nodes.iter().any(|v| v.as_u64() == Some(1)),
+            "mPelvis should be in scene nodes: {scene_nodes:?}"
+        );
+        // Root (index 0) should NOT be in scene nodes.
+        assert!(
+            !scene_nodes.iter().any(|v| v.as_u64() == Some(0)),
+            "Root should not be in scene nodes: {scene_nodes:?}"
+        );
+
+        // mPelvis's local translation should be its original world position.
+        let t = json
+            .pointer("/nodes/1/translation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        // Y should be ~1.0 (unchanged world position).
+        let y = t.get(1).and_then(Value::as_f64).unwrap_or(0.0);
+        assert!(
+            (y - 1.0).abs() < 1e-4,
+            "mPelvis Y should remain ~1.0 but got {y}"
+        );
     }
 }
