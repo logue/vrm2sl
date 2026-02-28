@@ -43,18 +43,32 @@ pub(super) fn reconstruct_sl_core_hierarchy(
     let original_node_worlds =
         compute_node_world_matrices(&original_node_locals, &original_parent_map);
 
-    let planned_links: Vec<(usize, usize)> = CORE_HIERARCHY_RELATIONS
-        .iter()
-        .chain(BENTO_HIERARCHY_RELATIONS.iter())
-        .filter_map(|(parent, child)| {
-            let parent_index = humanoid_bone_nodes.get(*parent).copied()?;
-            let child_index = humanoid_bone_nodes.get(*child).copied()?;
+    let planned_links: Vec<(usize, usize)> = {
+        // Build a child→parent map; later entries (refinement) override
+        // earlier entries (fallback), so e.g. when leftShoulder exists the
+        // chain becomes chest → leftShoulder → leftUpperArm instead of the
+        // fallback chest → leftUpperArm.
+        let mut child_to_parent: HashMap<usize, usize> = HashMap::new();
+        for (parent, child) in CORE_HIERARCHY_RELATIONS
+            .iter()
+            .chain(BENTO_HIERARCHY_RELATIONS.iter())
+        {
+            let Some(parent_index) = humanoid_bone_nodes.get(*parent).copied() else {
+                continue;
+            };
+            let Some(child_index) = humanoid_bone_nodes.get(*child).copied() else {
+                continue;
+            };
             if parent_index == child_index {
-                return None;
+                continue;
             }
-            Some((parent_index, child_index))
-        })
-        .collect();
+            child_to_parent.insert(child_index, parent_index);
+        }
+        child_to_parent
+            .into_iter()
+            .map(|(child, parent)| (parent, child))
+            .collect()
+    };
 
     if planned_links.is_empty() {
         return;
@@ -272,17 +286,6 @@ pub(super) fn normalize_sl_bone_rotations(
         let local_t = snapshot_t - parent_effective_t;
         effective_world_t[node_idx] = parent_effective_t + local_t;
 
-        let scale = json["nodes"][node_idx]
-            .get("scale")
-            .and_then(Value::as_array)
-            .and_then(|a| {
-                let sx = a.first().and_then(Value::as_f64)? as f32;
-                let sy = a.get(1).and_then(Value::as_f64)? as f32;
-                let sz = a.get(2).and_then(Value::as_f64)? as f32;
-                Some([sx, sy, sz])
-            })
-            .unwrap_or([1.0, 1.0, 1.0]);
-
         if let Some(obj) = json["nodes"][node_idx].as_object_mut() {
             obj.remove("matrix");
             obj.insert(
@@ -293,40 +296,51 @@ pub(super) fn normalize_sl_bone_rotations(
                 "rotation".to_string(),
                 serde_json::json!([0.0, 0.0, 0.0, 1.0]),
             );
-            obj.insert(
-                "scale".to_string(),
-                serde_json::json!([scale[0], scale[1], scale[2]]),
-            );
+            // Force identity scale: Second Life does not use bone scale and
+            // any residual non-unit scale (even near-identity values like
+            // 0.9999998) will cause IBM/joint-position mismatches that
+            // manifest as mesh twisting or offset bones.
+            obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
         }
     }
 }
 
 // ─── Scene root promotion ─────────────────────────────────────────────────────
 
-/// Promote `mPelvis` to become a direct child of the scene, removing any
-/// intermediate wrapper nodes (e.g. the "Root" empty that VRM files typically
-/// insert above the skeleton).
+/// Clean up wrapper nodes above `mPelvis` in the skeleton hierarchy.
 ///
-/// VRM fields commonly have the structure:
+/// VRM files commonly have the structure:
 ///   scene → Root (node 0, sometimes with a non-identity transform)
 ///               └─ Armature / J_Root
 ///                      └─ mPelvis → …
 ///
-/// When a glTF skin's inverse-bind-matrices are computed relative to the world
-/// origin, any non-identity ancestor transform above mPelvis will shift every
-/// joint's world matrix.  In the Second Life viewer this manifests as deformed
-/// or offset limbs.
+/// Any non-identity ancestor transform above mPelvis would shift every joint's
+/// world matrix, causing deformed or offset limbs in Second Life.
+///
+/// This function:
+/// 1. Keeps the **topmost** non-SL ancestor node ("Root") and resets it to
+///    identity so the SL viewer never applies an unwanted offset.
+/// 2. Collapses intermediate nodes between that root and mPelvis.
+/// 3. Recomputes mPelvis's local translation to match its original world
+///    position (now relative to the identity root).
+/// 4. Promotes orphaned non-skeleton children (mesh nodes) to the scene.
+///
+/// Returns the kept identity-root node index (for use as `skin.skeleton`) or
+/// `None` if no wrapper ancestors existed.
 pub(super) fn promote_pelvis_to_scene_root(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
-) {
+) -> Option<usize> {
     let Some(pelvis_index) = humanoid_bone_nodes.get("hips").copied() else {
-        return;
+        return None;
     };
 
     let parent_map = collect_parent_index_map_from_json(json);
 
-    let mut ancestors_to_remove: Vec<usize> = Vec::new();
+    // Collect non-SL ancestors from mPelvis up toward the scene root.
+    // ancestors[0] = direct parent of mPelvis,
+    // ancestors[last] = topmost non-SL ancestor (closest to scene root).
+    let mut ancestors: Vec<usize> = Vec::new();
     let mut current = pelvis_index;
     while let Some(&parent_idx) = parent_map.get(&current) {
         let parent_name = json["nodes"][parent_idx]
@@ -339,14 +353,15 @@ pub(super) fn promote_pelvis_to_scene_root(
         if is_sl_bone {
             break;
         }
-        ancestors_to_remove.push(parent_idx);
+        ancestors.push(parent_idx);
         current = parent_idx;
     }
 
-    if ancestors_to_remove.is_empty() {
-        return;
+    if ancestors.is_empty() {
+        return None;
     }
 
+    // Compute mPelvis's world position before any modifications.
     let node_locals: Vec<Matrix4<f32>> = json["nodes"]
         .as_array()
         .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
@@ -357,29 +372,88 @@ pub(super) fn promote_pelvis_to_scene_root(
         .get(pelvis_index)
         .copied()
         .unwrap_or_else(Matrix4::<f32>::identity);
-
-    let new_local_t = Vector3::new(
+    let pelvis_world_t = Vector3::new(
         pelvis_world[(0, 3)],
         pelvis_world[(1, 3)],
         pelvis_world[(2, 3)],
     );
 
-    // 1. Remove mPelvis from its direct parent's children list.
-    let direct_parent = parent_map.get(&pelvis_index).copied();
-    if let Some(dp) = direct_parent {
-        if let Some(dp_node) = json["nodes"][dp].as_object_mut() {
+    // The topmost ancestor becomes the identity skeleton root.
+    let identity_root_index = *ancestors.last().unwrap();
+    // All ancestors except the topmost are "intermediates" to collapse.
+    let intermediates: HashSet<usize> = ancestors
+        .iter()
+        .copied()
+        .filter(|&idx| idx != identity_root_index)
+        .collect();
+
+    // ── 1. Reset identity root to a pure identity transform. ──────────────
+    if let Some(obj) = json["nodes"][identity_root_index].as_object_mut() {
+        obj.remove("matrix");
+        obj.insert(
+            "translation".to_string(),
+            serde_json::json!([0.0, 0.0, 0.0]),
+        );
+        obj.insert(
+            "rotation".to_string(),
+            serde_json::json!([0.0, 0.0, 0.0, 1.0]),
+        );
+        obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
+    }
+
+    // ── 2. Remove mPelvis from its current parent's children list. ────────
+    if let Some(direct_parent) = parent_map.get(&pelvis_index).copied() {
+        if let Some(dp_node) = json["nodes"][direct_parent].as_object_mut() {
             if let Some(Value::Array(children)) = dp_node.get_mut("children") {
                 children.retain(|v| v.as_u64().map(|n| n as usize) != Some(pelvis_index));
             }
         }
     }
 
-    // 2. Update mPelvis local translation to its world position (no parent anymore).
+    // ── 3. Remove intermediates from their parents; gather orphans. ───────
+    let mut nodes_to_promote: Vec<usize> = Vec::new();
+    for &ancestor_idx in &ancestors {
+        let children_snapshot: Vec<usize> = json["nodes"][ancestor_idx]
+            .get("children")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for child_idx in children_snapshot {
+            if child_idx != pelvis_index
+                && child_idx != identity_root_index
+                && !intermediates.contains(&child_idx)
+            {
+                nodes_to_promote.push(child_idx);
+            }
+        }
+    }
+    // Clear intermediate nodes' children lists.
+    for &inter_idx in &intermediates {
+        if let Some(obj) = json["nodes"][inter_idx].as_object_mut() {
+            obj.remove("children");
+        }
+    }
+
+    // ── 4. Set identity root's children to just mPelvis. ─────────────────
+    if let Some(obj) = json["nodes"][identity_root_index].as_object_mut() {
+        obj.insert(
+            "children".to_string(),
+            serde_json::json!([pelvis_index as u64]),
+        );
+    }
+
+    // ── 5. Update mPelvis with its world-space position. ─────────────────
+    //    Since the parent (identity root) has identity transform, the local
+    //    translation equals the world translation.
     if let Some(node_obj) = json["nodes"][pelvis_index].as_object_mut() {
         node_obj.remove("matrix");
         node_obj.insert(
             "translation".to_string(),
-            serde_json::json!([new_local_t.x, new_local_t.y, new_local_t.z]),
+            serde_json::json!([pelvis_world_t.x, pelvis_world_t.y, pelvis_world_t.z]),
         );
         if !node_obj.contains_key("rotation") {
             node_obj.insert(
@@ -389,46 +463,33 @@ pub(super) fn promote_pelvis_to_scene_root(
         }
     }
 
-    // 3. Remove wrapper ancestors from the scene node list; add mPelvis.
-    let ancestors_set: HashSet<usize> = ancestors_to_remove.iter().copied().collect();
+    // ── 6. Update the scene root list. ───────────────────────────────────
+    //    Remove intermediates from the scene; ensure identity root is present;
+    //    promote orphaned mesh nodes.
     if let Some(scene) = json
         .get_mut("scenes")
         .and_then(Value::as_array_mut)
         .and_then(|s| s.first_mut())
     {
         if let Some(Value::Array(scene_nodes)) = scene.get_mut("nodes") {
+            // Remove intermediates and the pelvis itself from the scene
+            // (pelvis is now under identity root, not a direct scene child).
             scene_nodes.retain(|v| {
                 v.as_u64()
-                    .map(|n| !ancestors_set.contains(&(n as usize)))
+                    .map(|n| {
+                        let idx = n as usize;
+                        !intermediates.contains(&idx) && idx != pelvis_index
+                    })
                     .unwrap_or(true)
             });
-            let pelvis_val = Value::from(pelvis_index as u64);
-            if !scene_nodes.iter().any(|v| v == &pelvis_val) {
-                scene_nodes.push(pelvis_val);
-            }
-        }
-    }
 
-    // 4. Promote non-skeleton children of removed wrappers to the scene list
-    //    so that mesh nodes (Body/Face/Hair) are not orphaned.
-    let mut nodes_to_promote: Vec<usize> = Vec::new();
-    for &ancestor_idx in &ancestors_to_remove {
-        if let Some(Value::Array(children)) = json["nodes"][ancestor_idx].get("children") {
-            for child_val in children.clone() {
-                if let Some(child_idx) = child_val.as_u64().map(|n| n as usize) {
-                    if child_idx != pelvis_index && !ancestors_set.contains(&child_idx) {
-                        nodes_to_promote.push(child_idx);
-                    }
-                }
+            // Ensure identity root is in the scene.
+            let root_val = Value::from(identity_root_index as u64);
+            if !scene_nodes.iter().any(|v| v == &root_val) {
+                scene_nodes.push(root_val);
             }
-        }
-    }
-    if let Some(scene) = json
-        .get_mut("scenes")
-        .and_then(Value::as_array_mut)
-        .and_then(|s| s.first_mut())
-    {
-        if let Some(Value::Array(scene_nodes)) = scene.get_mut("nodes") {
+
+            // Promote orphaned non-skeleton children to the scene.
             for promote_idx in nodes_to_promote {
                 let val = Value::from(promote_idx as u64);
                 if !scene_nodes.iter().any(|v| v == &val) {
@@ -437,29 +498,33 @@ pub(super) fn promote_pelvis_to_scene_root(
             }
         }
     }
+
+    Some(identity_root_index)
 }
 
 // ─── skin.skeleton ────────────────────────────────────────────────────────────
 
-/// Set `skin.skeleton` for every skin to the `mPelvis` node (hips in SL).
+/// Set `skin.skeleton` for every skin to the skeleton root node.
 ///
 /// The glTF spec defines `skin.skeleton` as "the index of the node used as a
 /// skeleton root."  It does NOT require the skeleton root to be listed in the
-/// skin's `joints` array.  Setting it to `mPelvis` for ALL skins — even those
-/// whose joints are limited to head/eye bones — ensures that every viewer
-/// (including the SL viewer) starts joint-world-transform traversal from the
-/// correct scene-root node instead of from the first joint's local position.
+/// skin's `joints` array.
 ///
-/// Without this fix, a Face/Hair skin whose first joint is `mHead` would have
-/// `skeleton: mHead`, and viewers that start traversal from `skeleton` would
-/// compute `mHead`'s world matrix using only its local translation (≈ 0.09 m)
-/// rather than the full parent chain through `mPelvis` (≈ 1.73 m), causing the
-/// head mesh to appear near the avatar's feet.
-pub(super) fn set_skin_skeleton_to_pelvis(
+/// When an identity-root node exists above mPelvis, we point every skin's
+/// `skeleton` to that node.  Because the identity root has a pure identity
+/// transform, the SL viewer (and other importers that multiply the skeleton
+/// root's transform into the skinning equation) will not inject any unwanted
+/// offset.  All joints still resolve to their correct world positions through
+/// the normal parent-chain traversal.
+///
+/// When no identity root is available (i.e. `promote_pelvis_to_scene_root`
+/// found no wrapper ancestors) we fall back to mPelvis itself.
+pub(super) fn set_skin_skeleton_root(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    identity_root: Option<usize>,
 ) {
-    let pelvis_index = humanoid_bone_nodes.get("hips").copied();
+    let skeleton_index = identity_root.or_else(|| humanoid_bone_nodes.get("hips").copied());
 
     let skins = match json["skins"].as_array_mut() {
         Some(s) => s,
@@ -467,11 +532,8 @@ pub(super) fn set_skin_skeleton_to_pelvis(
     };
 
     for skin in skins.iter_mut() {
-        // Always set skeleton to mPelvis when available, even when mPelvis is
-        // not listed in this skin's joints array.  glTF allows the skeleton
-        // root to be an ancestor of all joints rather than one of the joints.
-        if let Some(pelvis_idx) = pelvis_index {
-            skin["skeleton"] = Value::Number(pelvis_idx.into());
+        if let Some(idx) = skeleton_index {
+            skin["skeleton"] = Value::Number(idx.into());
             continue;
         }
 

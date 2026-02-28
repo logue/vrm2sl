@@ -26,15 +26,17 @@ pub(super) const REQUIRED_BONES: [&str; 17] = [
 ];
 
 /// Core VRM-to-Second Life bone mapping table.
-pub(super) const BONE_MAP: [(&str, &str); 17] = [
+pub(super) const BONE_MAP: [(&str, &str); 19] = [
     ("hips", "mPelvis"),
     ("spine", "mTorso"),
     ("chest", "mChest"),
     ("neck", "mNeck"),
     ("head", "mHead"),
+    ("leftShoulder", "mCollarLeft"),
     ("leftUpperArm", "mShoulderLeft"),
     ("leftLowerArm", "mElbowLeft"),
     ("leftHand", "mWristLeft"),
+    ("rightShoulder", "mCollarRight"),
     ("rightUpperArm", "mShoulderRight"),
     ("rightLowerArm", "mElbowRight"),
     ("rightHand", "mWristRight"),
@@ -85,7 +87,14 @@ pub(super) const BENTO_BONE_MAP: [(&str, &str); 33] = [
 ];
 
 /// Core hierarchy edges to reconstruct for SL-compatible humanoid skeleton.
-pub(super) const CORE_HIERARCHY_RELATIONS: [(&str, &str); 16] = [
+///
+/// **Fallback** relations (`chest → leftUpperArm`, `chest → rightUpperArm`) are
+/// listed first.  When the VRM model also contains `leftShoulder` /
+/// `rightShoulder`, the more specific **refinement** relations
+/// (`chest → leftShoulder → leftUpperArm`) override the fallback via the
+/// deduplication logic in `reconstruct_sl_core_hierarchy`.
+pub(super) const CORE_HIERARCHY_RELATIONS: [(&str, &str); 20] = [
+    // ─ fallback (used when leftShoulder / rightShoulder are absent) ───
     ("hips", "spine"),
     ("spine", "chest"),
     ("chest", "neck"),
@@ -102,6 +111,11 @@ pub(super) const CORE_HIERARCHY_RELATIONS: [(&str, &str); 16] = [
     ("hips", "rightUpperLeg"),
     ("rightUpperLeg", "rightLowerLeg"),
     ("rightLowerLeg", "rightFoot"),
+    // ─ refinement: collar/shoulder chain (overrides fallback when present) ─
+    ("chest", "leftShoulder"),
+    ("leftShoulder", "leftUpperArm"),
+    ("chest", "rightShoulder"),
+    ("rightShoulder", "rightUpperArm"),
 ];
 
 /// Optional hierarchy edges for Bento extension bones.

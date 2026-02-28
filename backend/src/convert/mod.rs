@@ -6,13 +6,7 @@ mod skinning;
 mod types;
 mod validation;
 
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fs,
-    io::Cursor,
-    path::Path,
-};
+use std::{borrow::Cow, collections::HashMap, fs, io::Cursor, path::Path};
 
 use anyhow::{Context, Result, bail};
 use gltf::{binary::Glb, import};
@@ -34,9 +28,9 @@ use diagnostic::{
 };
 use geometry::{bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm};
 use skeleton::{
-    ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations, promote_pelvis_to_scene_root,
-    reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices, rename_bones,
-    set_skin_skeleton_to_pelvis, validate_bone_conversion_preconditions,
+    ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations,
+    promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices,
+    rename_bones, set_skin_skeleton_root, validate_bone_conversion_preconditions,
 };
 use skinning::{optimize_skinning_weights_and_joints, remap_unmapped_bone_weights};
 use validation::{
@@ -360,15 +354,14 @@ fn transform_and_write_glb(
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
-    // Promote mPelvis to the scene root, removing any intermediate "Root" /
-    // empty wrapper nodes that VRM files typically insert above the skeleton.
-    // The SL viewer and many glTF runtimes re-apply the scene-root node's
-    // transform on top of every joint's world matrix, so a non-identity
-    // intermediate root will offset every joint by that extra transform.
-    promote_pelvis_to_scene_root(&mut json, humanoid_bone_nodes);
-    // Set skin.skeleton to the hips (mPelvis) node so every importer agrees on
-    // the skeleton root.
-    set_skin_skeleton_to_pelvis(&mut json, humanoid_bone_nodes);
+    // Clean up wrapper nodes above mPelvis.  Keeps the topmost non-SL
+    // ancestor as an identity-transform root so that skin.skeleton can
+    // reference a node with no positional offset, preventing the SL viewer
+    // from injecting an unwanted transform into the skinning pipeline.
+    let identity_root = promote_pelvis_to_scene_root(&mut json, humanoid_bone_nodes);
+    // Set skin.skeleton to the identity root node (or mPelvis if none
+    // existed) so every importer agrees on the skeleton root.
+    set_skin_skeleton_root(&mut json, humanoid_bone_nodes, identity_root);
     // Bake the scale factor directly into geometry (node translations and mesh
     // vertex POSITION data) instead of setting a non-unit scale on root nodes.
     // This is the most universally compatible approach for SL: no root-scale
@@ -540,8 +533,9 @@ mod tests {
     use nalgebra::Vector3;
     use serde_json::Value;
 
-    use super::*;
-    use super::gltf_utils::{collect_parent_index_map_from_json, compute_node_world_matrices, node_to_local_matrix};
+    use super::gltf_utils::{
+        collect_parent_index_map_from_json, compute_node_world_matrices, node_to_local_matrix,
+    };
     use super::skeleton::{
         ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations,
         promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, rename_bones,
@@ -552,6 +546,7 @@ mod tests {
         estimate_texture_fee, extract_humanoid_bone_nodes, projected_texture_size,
         validate_hierarchy,
     };
+    use super::*;
 
     #[test]
     fn given_texture_sizes_when_estimating_fee_then_reduction_is_computed() {
@@ -1000,12 +995,12 @@ mod tests {
     }
 
     #[test]
-    fn given_root_wrapper_when_promoting_pelvis_then_pelvis_parent_is_removed() {
+    fn given_root_wrapper_when_promoting_pelvis_then_identity_root_is_kept() {
         let mut json = serde_json::json!({
             "nodes": [
                 {
                     "name": "Root",
-                    "translation": [0.0, 0.0, 0.0],
+                    "translation": [0.5, 0.0, 0.1],
                     "children": [1, 2]
                 },
                 {
@@ -1026,31 +1021,67 @@ mod tests {
         });
 
         let humanoid = HashMap::from([("hips".to_string(), 1usize)]);
-        promote_pelvis_to_scene_root(&mut json, &humanoid);
+        let identity_root = promote_pelvis_to_scene_root(&mut json, &humanoid);
 
+        // The identity root should be the original Root node (index 0).
+        assert_eq!(identity_root, Some(0));
+
+        // Root should still be in the scene as the identity skeleton root.
         let scene_nodes = json
             .pointer("/scenes/0/nodes")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
         assert!(
-            scene_nodes.iter().any(|v| v.as_u64() == Some(1)),
-            "mPelvis should be in scene nodes: {scene_nodes:?}"
-        );
-        assert!(
-            !scene_nodes.iter().any(|v| v.as_u64() == Some(0)),
-            "Root should not be in scene nodes: {scene_nodes:?}"
+            scene_nodes.iter().any(|v| v.as_u64() == Some(0)),
+            "Root (identity) should remain in scene: {scene_nodes:?}"
         );
 
+        // mPelvis should NOT be a direct scene child (it's under Root now).
+        assert!(
+            !scene_nodes.iter().any(|v| v.as_u64() == Some(1)),
+            "mPelvis should not be a direct scene node: {scene_nodes:?}"
+        );
+
+        // Body mesh should be promoted to scene root.
+        assert!(
+            scene_nodes.iter().any(|v| v.as_u64() == Some(2)),
+            "Body should be promoted to scene: {scene_nodes:?}"
+        );
+
+        // Root's transform should be identity.
+        let root_t = json
+            .pointer("/nodes/0/translation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let root_tx = root_t.first().and_then(Value::as_f64).unwrap_or(99.0);
+        assert!((root_tx).abs() < 1e-4, "Root translation should be zero");
+
+        // Root's children should contain only mPelvis.
+        let root_children = json
+            .pointer("/nodes/0/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(root_children, vec![Value::from(1u64)]);
+
+        // mPelvis translation should equal its world position.
+        // Original: Root t=[0.5,0,0.1] + Pelvis t=[0,1,0] → world [0.5,1,0.1]
         let t = json
             .pointer("/nodes/1/translation")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let x = t.first().and_then(Value::as_f64).unwrap_or(0.0);
         let y = t.get(1).and_then(Value::as_f64).unwrap_or(0.0);
         assert!(
+            (x - 0.5).abs() < 1e-4,
+            "mPelvis X should be ~0.5 (world) but got {x}"
+        );
+        assert!(
             (y - 1.0).abs() < 1e-4,
-            "mPelvis Y should remain ~1.0 but got {y}"
+            "mPelvis Y should be ~1.0 (world) but got {y}"
         );
     }
 }
