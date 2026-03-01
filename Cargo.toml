@@ -2,6 +2,11 @@
 members = ["backend"]
 resolver = "2"
 
+# Optimise nalgebra even in debug builds so that per-vertex matrix
+# operations in the converter run at acceptable speed.
+[profile.dev.package.nalgebra]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 codegen-units = 16

@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
-use nalgebra::{Matrix4, Vector3};
+use nalgebra::{Matrix4, Vector3, Vector4};
 use serde_json::Value;
 
 use super::gltf_utils::{
-    collect_node_name_set_from_json, collect_parent_index_map_from_json,
-    compute_node_world_matrices, node_to_local_matrix, set_node_local_matrix, write_mat4_f32_le,
+    accessor_meta, collect_node_name_set_from_json, collect_parent_index_map_from_json,
+    compute_node_world_matrices, node_to_local_matrix, read_joint_slot, read_weight_f32,
+    set_node_local_matrix, write_mat4_f32_le,
 };
 use super::types::{
     BENTO_BONE_MAP, BENTO_HIERARCHY_RELATIONS, BONE_MAP, CORE_HIERARCHY_RELATIONS, ValidationIssue,
@@ -223,10 +224,13 @@ pub(super) fn ensure_target_bones_exist_after_rename(
 /// Bones are processed in topological (parent-before-child) order so that each
 /// child uses the already-corrected parent world position when computing its
 /// own local translation.
+///
+/// Returns the **pre-normalization** node world matrices so that the caller can
+/// correct mesh vertex positions for the bind-pose change.
 pub(super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
-) {
+) -> Vec<Matrix4<f32>> {
     let sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
@@ -303,6 +307,353 @@ pub(super) fn normalize_sl_bone_rotations(
             obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
         }
     }
+
+    node_worlds_snapshot
+}
+
+// ─── Bind-pose vertex correction ──────────────────────────────────────────────
+
+/// Correct mesh vertex positions and normals after bone rotations have been
+/// normalised to identity.
+///
+/// When `normalize_sl_bone_rotations` removes bone rotations while preserving
+/// world-space translations, the *bind pose* changes: the bones now occupy the
+/// same positions but with different orientations. Mesh vertices that were
+/// authored to wrap around the original rotated bones will be misaligned unless
+/// they are counter-rotated into the new (identity-rotation) bind pose.
+///
+/// This is the programmatic equivalent of Blender's **Apply Rotation and Scale**
+/// on an armature: all rest-rotations are baked into the mesh geometry so the
+/// mesh stays visually identical while the bone orientations become identity.
+///
+/// The per-vertex correction is a standard *change-of-bind-pose* operation:
+///
+///   `new_pos = Σ wᵢ · (W′ᵢ · W⁻¹ᵢ) · old_pos`
+///
+/// where `Wᵢ` / `W′ᵢ` are the old / new world matrices for joint *i* and `wᵢ`
+/// is the vertex weight for that joint.  Normals are corrected with the
+/// upper-left 3×3 of the same blended matrix and re-normalised.
+pub(super) fn correct_mesh_vertices_for_bind_pose_change(
+    json: &Value,
+    bin: &mut [u8],
+    old_world_matrices: &[Matrix4<f32>],
+) -> Result<()> {
+    // Compute post-normalization world matrices.
+    let node_locals: Vec<Matrix4<f32>> = json["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
+        .unwrap_or_default();
+    let parent_map = collect_parent_index_map_from_json(json);
+    let new_worlds = compute_node_world_matrices(&node_locals, &parent_map);
+
+    // Per-node correction: C[i] = new_world[i] · inverse(old_world[i])
+    let node_count = old_world_matrices.len().min(new_worlds.len());
+    let corrections: Vec<Matrix4<f32>> = (0..node_count)
+        .map(|i| {
+            let old_inv = old_world_matrices[i]
+                .try_inverse()
+                .unwrap_or_else(Matrix4::<f32>::identity);
+            new_worlds[i] * old_inv
+        })
+        .collect();
+
+    let skin_count = json["skins"].as_array().map(|s| s.len()).unwrap_or(0);
+    let mut corrected_pos_accessors = HashSet::<usize>::new();
+    let mut corrected_norm_accessors = HashSet::<usize>::new();
+
+    for skin_idx in 0..skin_count {
+        let joints: Vec<usize> = json["skins"][skin_idx]["joints"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if joints.is_empty() {
+            continue;
+        }
+
+        // Per-slot correction matrix.
+        let slot_corrections: Vec<Matrix4<f32>> = joints
+            .iter()
+            .map(|&ni| {
+                corrections
+                    .get(ni)
+                    .copied()
+                    .unwrap_or_else(Matrix4::identity)
+            })
+            .collect();
+
+        // Quick check: skip this skin if all corrections are identity.
+        let any_non_identity = slot_corrections.iter().any(|c| {
+            let diff: f32 = (0..4)
+                .flat_map(|r| (0..4).map(move |co| (r, co)))
+                .map(|(r, co)| {
+                    let expected = if r == co { 1.0 } else { 0.0 };
+                    (c[(r, co)] - expected).abs()
+                })
+                .sum();
+            diff > 1e-5
+        });
+        if !any_non_identity {
+            continue;
+        }
+
+        let prims = collect_primitives_for_skin_with_attributes(json, skin_idx);
+
+        for prim in prims {
+            let Some(jnt_meta) = accessor_meta(json, prim.joints_accessor) else {
+                continue;
+            };
+            let Some(wgt_meta) = accessor_meta(json, prim.weights_accessor) else {
+                continue;
+            };
+            if jnt_meta.accessor_type != "VEC4" || wgt_meta.accessor_type != "VEC4" {
+                continue;
+            }
+            if !(jnt_meta.component_type == 5121 || jnt_meta.component_type == 5123) {
+                continue;
+            }
+            if wgt_meta.component_type != 5126 {
+                continue;
+            }
+
+            let vert_count = jnt_meta.count.min(wgt_meta.count);
+
+            // ── Correct POSITION ──────────────────────────────────────────
+            if let Some(pos_acc_idx) = prim.position_accessor {
+                if corrected_pos_accessors.insert(pos_acc_idx) {
+                    if let Some(pos_meta) = accessor_meta(json, pos_acc_idx) {
+                        if pos_meta.component_type == 5126 && pos_meta.accessor_type == "VEC3" {
+                            let count = vert_count.min(pos_meta.count);
+                            for vi in 0..count {
+                                let corr = blend_correction_matrix(
+                                    bin,
+                                    &jnt_meta,
+                                    &wgt_meta,
+                                    vi,
+                                    &slot_corrections,
+                                );
+                                let off = pos_meta.base_offset + vi * pos_meta.stride;
+                                if off + 12 > bin.len() {
+                                    continue;
+                                }
+                                let px = f32::from_le_bytes([
+                                    bin[off],
+                                    bin[off + 1],
+                                    bin[off + 2],
+                                    bin[off + 3],
+                                ]);
+                                let py = f32::from_le_bytes([
+                                    bin[off + 4],
+                                    bin[off + 5],
+                                    bin[off + 6],
+                                    bin[off + 7],
+                                ]);
+                                let pz = f32::from_le_bytes([
+                                    bin[off + 8],
+                                    bin[off + 9],
+                                    bin[off + 10],
+                                    bin[off + 11],
+                                ]);
+                                let new_p = corr * Vector4::new(px, py, pz, 1.0);
+                                bin[off..off + 4].copy_from_slice(&new_p.x.to_le_bytes());
+                                bin[off + 4..off + 8].copy_from_slice(&new_p.y.to_le_bytes());
+                                bin[off + 8..off + 12].copy_from_slice(&new_p.z.to_le_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Correct NORMAL ────────────────────────────────────────────
+            if let Some(norm_acc_idx) = prim.normal_accessor {
+                if corrected_norm_accessors.insert(norm_acc_idx) {
+                    if let Some(norm_meta) = accessor_meta(json, norm_acc_idx) {
+                        if norm_meta.component_type == 5126 && norm_meta.accessor_type == "VEC3" {
+                            let count = vert_count.min(norm_meta.count);
+                            for vi in 0..count {
+                                let corr = blend_correction_matrix(
+                                    bin,
+                                    &jnt_meta,
+                                    &wgt_meta,
+                                    vi,
+                                    &slot_corrections,
+                                );
+                                let off = norm_meta.base_offset + vi * norm_meta.stride;
+                                if off + 12 > bin.len() {
+                                    continue;
+                                }
+                                let nx = f32::from_le_bytes([
+                                    bin[off],
+                                    bin[off + 1],
+                                    bin[off + 2],
+                                    bin[off + 3],
+                                ]);
+                                let ny = f32::from_le_bytes([
+                                    bin[off + 4],
+                                    bin[off + 5],
+                                    bin[off + 6],
+                                    bin[off + 7],
+                                ]);
+                                let nz = f32::from_le_bytes([
+                                    bin[off + 8],
+                                    bin[off + 9],
+                                    bin[off + 10],
+                                    bin[off + 11],
+                                ]);
+                                // Use upper-left 3×3 for normals.
+                                let r00 = corr[(0, 0)];
+                                let r01 = corr[(0, 1)];
+                                let r02 = corr[(0, 2)];
+                                let r10 = corr[(1, 0)];
+                                let r11 = corr[(1, 1)];
+                                let r12 = corr[(1, 2)];
+                                let r20 = corr[(2, 0)];
+                                let r21 = corr[(2, 1)];
+                                let r22 = corr[(2, 2)];
+                                let rnx = r00 * nx + r01 * ny + r02 * nz;
+                                let rny = r10 * nx + r11 * ny + r12 * nz;
+                                let rnz = r20 * nx + r21 * ny + r22 * nz;
+                                let len = (rnx * rnx + rny * rny + rnz * rnz).sqrt();
+                                let (rnx, rny, rnz) = if len > 1e-8 {
+                                    (rnx / len, rny / len, rnz / len)
+                                } else {
+                                    (nx, ny, nz)
+                                };
+                                bin[off..off + 4].copy_from_slice(&rnx.to_le_bytes());
+                                bin[off + 4..off + 8].copy_from_slice(&rny.to_le_bytes());
+                                bin[off + 8..off + 12].copy_from_slice(&rnz.to_le_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Compute the weighted correction matrix for a single vertex.
+fn blend_correction_matrix(
+    bin: &[u8],
+    jnt_meta: &super::gltf_utils::AccessorMeta,
+    wgt_meta: &super::gltf_utils::AccessorMeta,
+    vertex: usize,
+    slot_corrections: &[Matrix4<f32>],
+) -> Matrix4<f32> {
+    let mut result = Matrix4::<f32>::zeros();
+    let mut total_weight = 0.0f32;
+
+    for lane in 0..4 {
+        let slot = read_joint_slot(bin, jnt_meta, vertex, lane).unwrap_or(0) as usize;
+        let weight = read_weight_f32(bin, wgt_meta, vertex, lane).unwrap_or(0.0);
+
+        if weight <= 1e-7 {
+            continue;
+        }
+
+        let corr = slot_corrections
+            .get(slot)
+            .copied()
+            .unwrap_or_else(Matrix4::identity);
+        result += weight * corr;
+        total_weight += weight;
+    }
+
+    // Fallback to identity if no effective weight.
+    if total_weight < 1e-7 {
+        return Matrix4::identity();
+    }
+
+    result
+}
+
+/// Primitive attribute info for bind-pose correction.
+struct PrimitiveBindingWithAttributes {
+    joints_accessor: usize,
+    weights_accessor: usize,
+    position_accessor: Option<usize>,
+    normal_accessor: Option<usize>,
+}
+
+/// Collect primitive attribute accessors for all primitives bound to a skin.
+fn collect_primitives_for_skin_with_attributes(
+    json: &Value,
+    skin_index: usize,
+) -> Vec<PrimitiveBindingWithAttributes> {
+    let nodes = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let meshes = json
+        .get("meshes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut seen = HashSet::<(usize, usize)>::new();
+    let mut bindings = Vec::new();
+
+    for node in nodes {
+        let Some(node_skin) = node.get("skin").and_then(Value::as_u64).map(|v| v as usize) else {
+            continue;
+        };
+        if node_skin != skin_index {
+            continue;
+        }
+        let Some(mesh_index) = node.get("mesh").and_then(Value::as_u64).map(|v| v as usize) else {
+            continue;
+        };
+        let Some(mesh) = meshes.get(mesh_index) else {
+            continue;
+        };
+        let Some(primitives) = mesh.get("primitives").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for primitive in primitives {
+            let Some(attrs) = primitive.get("attributes").and_then(Value::as_object) else {
+                continue;
+            };
+            let Some(jnt_acc) = attrs
+                .get("JOINTS_0")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+            else {
+                continue;
+            };
+            let Some(wgt_acc) = attrs
+                .get("WEIGHTS_0")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+            else {
+                continue;
+            };
+            if !seen.insert((jnt_acc, wgt_acc)) {
+                continue;
+            }
+            let pos_acc = attrs
+                .get("POSITION")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            let norm_acc = attrs
+                .get("NORMAL")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            bindings.push(PrimitiveBindingWithAttributes {
+                joints_accessor: jnt_acc,
+                weights_accessor: wgt_acc,
+                position_accessor: pos_acc,
+                normal_accessor: norm_acc,
+            });
+        }
+    }
+
+    bindings
 }
 
 // ─── Scene root promotion ─────────────────────────────────────────────────────

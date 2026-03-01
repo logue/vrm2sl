@@ -28,9 +28,10 @@ use diagnostic::{
 };
 use geometry::{bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm};
 use skeleton::{
-    ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations,
-    promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices,
-    rename_bones, set_skin_skeleton_root, validate_bone_conversion_preconditions,
+    correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
+    normalize_sl_bone_rotations, promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy,
+    regenerate_inverse_bind_matrices, rename_bones, set_skin_skeleton_root,
+    validate_bone_conversion_preconditions,
 };
 use skinning::{optimize_skinning_weights_and_joints, remap_unmapped_bone_weights};
 use validation::{
@@ -348,7 +349,11 @@ fn transform_and_write_glb(
     // the inverse-bind-matrix translations and applies its own (identity)
     // orientations in the SL skeleton; any non-identity rotation baked into
     // the node hierarchy will therefore cause incorrect deformation.
-    normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
+    let pre_normalization_worlds = normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
+    // Counter-rotate mesh vertices so the mesh shape stays visually identical
+    // under the new identity-rotation bind pose. This is the programmatic
+    // equivalent of Blender's "Apply Rotation and Scale" on the armature.
+    correct_mesh_vertices_for_bind_pose_change(&json, &mut bin, &pre_normalization_worlds)?;
     // Remap weights from unmapped VRM bones (e.g. upperChest, spring bones)
     // to their nearest mapped-SL ancestor so that only valid SL bones remain
     // in the skin joints list after optimization.
