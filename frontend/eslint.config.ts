@@ -3,8 +3,10 @@ import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescri
 
 import { globalIgnores } from 'eslint/config';
 import pluginVueI18n from '@intlify/eslint-plugin-vue-i18n';
-import pluginImport from 'eslint-plugin-import';
+import pluginImport from 'eslint-plugin-import-x';
 import pluginOxlint from 'eslint-plugin-oxlint';
+// @ts-ignore
+import pluginSecurity from 'eslint-plugin-security';
 import pluginVue from 'eslint-plugin-vue';
 import pluginVueA11y from 'eslint-plugin-vuejs-accessibility';
 import pluginYml from 'eslint-plugin-yml';
@@ -15,6 +17,8 @@ import pluginVuetify from 'eslint-plugin-vuetify';
 // import { configureVueProject } from '@vue/eslint-config-typescript'
 // configureVueProject({ scriptLangs: ['ts', 'tsx'] })
 // More info at https://github.com/vuejs/eslint-config-typescript/#advanced-setup
+
+const vueI18nFlatRecommended = pluginVueI18n.configs['flat/recommended'] as unknown as object[];
 
 export default defineConfigWithVueTs(
   {
@@ -27,10 +31,11 @@ export default defineConfigWithVueTs(
   ...pluginVue.configs['flat/recommended'],
   ...pluginVueA11y.configs['flat/recommended'],
   ...pluginYml.configs['flat/recommended'],
-  ...pluginVueI18n.configs['flat/recommended'],
+  ...vueI18nFlatRecommended,
   vueTsConfigs.recommended,
   pluginImport.flatConfigs.recommended,
   pluginImport.flatConfigs.typescript,
+  pluginSecurity.configs.recommended,
   {
     name: 'Vuetify',
     files: ['*.vue', '**/*.vue'],
@@ -44,7 +49,7 @@ export default defineConfigWithVueTs(
   {
     settings: {
       // This will do the trick
-      'import/parsers': {
+      'import-x/parsers': {
         espree: ['.js', '.cjs', '.mjs', '.jsx'],
         '@typescript-eslint/parser': ['.ts', '.tsx'],
         'vue-eslint-parser': ['.vue']
@@ -53,7 +58,7 @@ export default defineConfigWithVueTs(
         localeDir: './src/locales/*.{json,json5,yaml,yml}',
         messageSyntaxVersion: '^11.0.0'
       },
-      'import/resolver': {
+      'import-x/resolver': {
         // You will also need to install and configure the TypeScript resolver
         // See also https://github.com/import-js/eslint-import-resolver-typescript#configuration
         typescript: true,
@@ -107,16 +112,16 @@ export default defineConfigWithVueTs(
       // Fix for vite env.d.ts.
       '@typescript-eslint/triple-slash-reference': 'off',
       // Fix for Vue setup style
-      'import/default': 'off',
+      'import-x/default': 'off',
       // Fix for vite
-      'import/namespace': 'off',
-      'import/no-default-export': 'off',
-      'import/no-named-as-default-member': 'off',
-      'import/no-named-as-default': 'off',
+      'import-x/namespace': 'off',
+      'import-x/no-default-export': 'off',
+      'import-x/no-named-as-default-member': 'off',
+      'import-x/no-named-as-default': 'off',
       /*
       // Sort Import Order.
       // see https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/order.md#importorder-enforce-a-convention-in-module-import-order
-      'import/order': [
+      'import-x/order': [
         'error',
         {
           groups: ['builtin', 'external', 'parent', 'sibling', 'index', 'object', 'type'],
@@ -157,7 +162,7 @@ export default defineConfigWithVueTs(
     }
   },
 
-  ...pluginOxlint.configs['flat/recommended'],
+  ...pluginOxlint.buildFromOxlintConfigFile('.oxlintrc.json'),
 
   configPrettier
 );

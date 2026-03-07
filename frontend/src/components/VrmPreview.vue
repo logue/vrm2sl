@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
@@ -15,6 +16,8 @@ const props = defineProps<{
 const canvasHost = ref<HTMLDivElement | null>(null);
 const errorMessage = ref('');
 const loading = ref(false);
+const animationEnabled = ref(false);
+const animationStatus = ref('待機モーションは無効です');
 
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
@@ -24,6 +27,43 @@ let modelRoot: THREE.Object3D | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let animationFrameId = 0;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+let clock: THREE.Clock | null = null;
+let bvhIdleClip: THREE.AnimationClip | null = null;
+let mixer: THREE.AnimationMixer | null = null;
+let activeActions: THREE.AnimationAction[] = [];
+
+const BVH_TO_SL_BONE: Record<string, string> = {
+  hip: 'mPelvis',
+  abdomen: 'mTorso',
+  chest: 'mChest',
+  neck: 'mNeck',
+  head: 'mHead',
+  lCollar: 'mCollarLeft',
+  lShldr: 'mShoulderLeft',
+  lForeArm: 'mElbowLeft',
+  lHand: 'mWristLeft',
+  rCollar: 'mCollarRight',
+  rShldr: 'mShoulderRight',
+  rForeArm: 'mElbowRight',
+  rHand: 'mWristRight',
+  lThigh: 'mHipLeft',
+  lShin: 'mKneeLeft',
+  lFoot: 'mAnkleLeft',
+  rThigh: 'mHipRight',
+  rShin: 'mKneeRight',
+  rFoot: 'mAnkleRight'
+};
+
+const HAND_PROBLEM_BONES = new Set([
+  'mCollarLeft',
+  'mShoulderLeft',
+  'mElbowLeft',
+  'mWristLeft',
+  'mCollarRight',
+  'mShoulderRight',
+  'mElbowRight',
+  'mWristRight'
+]);
 
 const updateRendererSize = () => {
   if (!canvasHost.value || !renderer || !camera) {
@@ -39,6 +79,13 @@ const updateRendererSize = () => {
 };
 
 const clearModel = () => {
+  if (mixer) {
+    mixer.stopAllAction();
+    mixer.uncacheRoot(mixer.getRoot());
+    mixer = null;
+  }
+  activeActions = [];
+
   if (!scene || !modelRoot) {
     return;
   }
@@ -59,6 +106,239 @@ const clearModel = () => {
   });
 
   modelRoot = null;
+};
+
+const collectSkinnedMeshes = (root: THREE.Object3D): THREE.SkinnedMesh[] => {
+  const meshes: THREE.SkinnedMesh[] = [];
+  root.traverse(object => {
+    if (object instanceof THREE.SkinnedMesh && object.skeleton) {
+      meshes.push(object);
+    }
+  });
+  return meshes;
+};
+
+const ensureEyeMaterialsVisible = (root: THREE.Object3D) => {
+  root.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) {
+      return;
+    }
+
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+
+    for (const material of materials) {
+      const materialName = (material.name ?? '').toLowerCase();
+      const isEyeSurface =
+        materialName.includes('eyeiris') ||
+        materialName.includes('eyewhite') ||
+        materialName.includes('eyehighlight');
+      const isEyelashLike =
+        materialName.includes('faceeyeline') ||
+        materialName.includes('eyelash') ||
+        materialName.includes('faceline');
+      const isBrowLike = materialName.includes('facebrow');
+
+      if (!isEyeSurface && !isEyelashLike && !isBrowLike) {
+        continue;
+      }
+
+      if (isEyeSurface) {
+        material.alphaTest = 0.0;
+        material.transparent = true;
+        material.depthWrite = false;
+        // Keep normal depth test so overall mesh ordering stays natural.
+        material.depthTest = true;
+        material.side = THREE.DoubleSide;
+        material.polygonOffset = true;
+        material.polygonOffsetFactor = -1;
+        material.polygonOffsetUnits = -1;
+      } else {
+        // Eyelashes/brows rely on smooth alpha blending.
+        material.alphaTest = 0.02;
+        material.transparent = true;
+        material.depthWrite = false;
+        material.depthTest = true;
+        material.side = THREE.DoubleSide;
+        material.polygonOffset = false;
+      }
+
+      material.needsUpdate = true;
+    }
+  });
+};
+
+const resetSkinnedMeshesToBindPose = () => {
+  if (!modelRoot) {
+    return;
+  }
+
+  for (const skinnedMesh of collectSkinnedMeshes(modelRoot)) {
+    skinnedMesh.pose();
+    skinnedMesh.skeleton.update();
+  }
+  modelRoot.updateMatrixWorld(true);
+};
+
+const parseBvhTrack = (trackName: string): { bone: string; property: string } | null => {
+  const boneTrack = trackName.match(/^\.bones\[(.+?)\]\.(position|quaternion|scale)$/);
+  if (boneTrack) {
+    const [, bone, property] = boneTrack;
+    if (!bone || !property) {
+      return null;
+    }
+    return { bone, property };
+  }
+
+  const simpleTrack = trackName.match(/^([^.[\]]+)\.(position|quaternion|scale)$/);
+  if (simpleTrack) {
+    const [, bone, property] = simpleTrack;
+    if (!bone || !property) {
+      return null;
+    }
+    return { bone, property };
+  }
+
+  return null;
+};
+
+const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationClip | null => {
+  if (!bvhIdleClip) {
+    return null;
+  }
+
+  const tracks: THREE.KeyframeTrack[] = [];
+
+  for (const track of bvhIdleClip.tracks) {
+    const parsed = parseBvhTrack(track.name);
+    if (!parsed) {
+      continue;
+    }
+
+    const targetBoneName = BVH_TO_SL_BONE[parsed.bone];
+    if (!targetBoneName) {
+      continue;
+    }
+
+    if (!targetSkeleton.getBoneByName(targetBoneName)) {
+      continue;
+    }
+
+    // BVH wrist orientation and VRM hand/thumb bind axes are often different.
+    // Applying wrist rotation directly can cause thumb collapse in preview,
+    // so wrist tracks are skipped for deformation diagnostics.
+    if (parsed.property === 'quaternion' && HAND_PROBLEM_BONES.has(targetBoneName)) {
+      continue;
+    }
+
+    // BVH root translation is authored in a different coordinate/scale space.
+    // Applying position tracks directly can move the whole avatar out of view,
+    // so preview uses rotation-only retargeting for deformation checks.
+    if (parsed.property === 'position') {
+      continue;
+    }
+
+    const nextTrack = track.clone();
+    nextTrack.name = `.bones[${targetBoneName}].${parsed.property}`;
+    tracks.push(nextTrack);
+  }
+
+  if (tracks.length === 0) {
+    return null;
+  }
+
+  return new THREE.AnimationClip('avatar_stand_retargeted', bvhIdleClip.duration, tracks);
+};
+
+const applyIdleAnimation = () => {
+  if (!modelRoot || !animationEnabled.value) {
+    return;
+  }
+
+  if (!bvhIdleClip) {
+    animationStatus.value = '待機モーション読み込み待ちです。';
+    return;
+  }
+
+  const skinnedMeshes = collectSkinnedMeshes(modelRoot);
+  if (skinnedMeshes.length === 0) {
+    animationStatus.value = 'スキン付きメッシュが見つからず、待機モーションを適用できません。';
+    return;
+  }
+
+  if (mixer) {
+    mixer.stopAllAction();
+    mixer.uncacheRoot(mixer.getRoot());
+  }
+  activeActions = [];
+
+  mixer = new THREE.AnimationMixer(modelRoot);
+
+  let appliedMeshCount = 0;
+  let appliedTrackCount = 0;
+  let maxKeyframes = 0;
+
+  for (const skinnedMesh of skinnedMeshes) {
+    const retargeted = buildRetargetedClip(skinnedMesh.skeleton);
+    if (!retargeted) {
+      continue;
+    }
+
+    appliedMeshCount += 1;
+    appliedTrackCount += retargeted.tracks.length;
+    for (const track of retargeted.tracks) {
+      maxKeyframes = Math.max(maxKeyframes, track.times.length);
+    }
+
+    const action = mixer.clipAction(retargeted, skinnedMesh);
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = false;
+    action.enabled = true;
+    action.play();
+    activeActions.push(action);
+  }
+
+  if (appliedMeshCount === 0) {
+    animationStatus.value = '待機モーションのボーントラックが一致しませんでした。';
+    return;
+  }
+
+  if (maxKeyframes <= 1) {
+    animationStatus.value = `待機ポーズ適用中（このBVHは1フレームのため静止） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}`;
+    return;
+  }
+
+  animationStatus.value = `待機モーション再生中（回転のみ） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}`;
+};
+
+const stopIdleAnimation = () => {
+  if (!mixer) {
+    resetSkinnedMeshesToBindPose();
+    animationStatus.value = '待機モーション停止中';
+    return;
+  }
+
+  mixer.stopAllAction();
+  mixer.setTime(0);
+  mixer = null;
+  activeActions = [];
+  resetSkinnedMeshesToBindPose();
+  animationStatus.value = '待機モーション停止中';
+};
+
+const loadIdleBvh = async () => {
+  try {
+    const loader = new BVHLoader();
+    const result = await loader.loadAsync('/animations/avatar_stand.bvh');
+    bvhIdleClip = result.clip;
+    animationStatus.value = `待機モーション読込済み (frames: ${Math.round(result.clip.duration)})`;
+
+    if (modelRoot && animationEnabled.value) {
+      applyIdleAnimation();
+    }
+  } catch (error) {
+    bvhIdleClip = null;
+    animationStatus.value = `待機モーション読込失敗: ${String(error)}`;
+  }
 };
 
 const fitCameraToModel = (root: THREE.Object3D) => {
@@ -121,8 +401,24 @@ const loadPreviewModel = async (path: string, options: ConvertOptions) => {
 
     clearModel();
     modelRoot = gltf;
+
+    // Ensure eye materials are visible in the initial (non-BVH) preview as well.
+    ensureEyeMaterialsVisible(modelRoot);
+
+    modelRoot.traverse(object => {
+      if (object instanceof THREE.SkinnedMesh) {
+        // Animated skinned meshes can be culled incorrectly when bounds are stale.
+        // Keep them always renderable in preview to avoid eye/face disappearance.
+        object.frustumCulled = false;
+      }
+    });
+
     scene.add(modelRoot);
     fitCameraToModel(modelRoot);
+
+    if (animationEnabled.value) {
+      applyIdleAnimation();
+    }
   } catch (error) {
     errorMessage.value = `Preview failed: ${String(error)}`;
   } finally {
@@ -191,7 +487,13 @@ onMounted(() => {
   });
   resizeObserver.observe(canvasHost.value);
 
+  clock = new THREE.Clock();
+
   const render = () => {
+    if (clock && mixer) {
+      const delta = clock.getDelta();
+      mixer.update(delta);
+    }
     if (controls) {
       controls.update();
     }
@@ -221,6 +523,21 @@ watch(
   }
 );
 
+watch(
+  () => animationEnabled.value,
+  enabled => {
+    if (enabled) {
+      if (!bvhIdleClip) {
+        void loadIdleBvh();
+      } else {
+        applyIdleAnimation();
+      }
+      return;
+    }
+    stopIdleAnimation();
+  }
+);
+
 onBeforeUnmount(() => {
   if (reloadTimer) {
     clearTimeout(reloadTimer);
@@ -228,6 +545,7 @@ onBeforeUnmount(() => {
   }
   cancelAnimationFrame(animationFrameId);
   resizeObserver?.disconnect();
+  stopIdleAnimation();
   clearModel();
   controls?.dispose();
   renderer?.dispose();
@@ -241,6 +559,7 @@ onBeforeUnmount(() => {
   renderer = null;
   controls = null;
   resizeObserver = null;
+  clock = null;
 });
 </script>
 
@@ -252,12 +571,24 @@ onBeforeUnmount(() => {
     </v-card-title>
     <v-card-text>
       <div ref="canvasHost" class="preview-host" />
+      <div class="d-flex flex-wrap ga-3 align-center mt-3">
+        <v-switch
+          v-model="animationEnabled"
+          color="primary"
+          density="compact"
+          hide-details
+          label="待機モーション (avatar_stand.bvh)"
+        />
+      </div>
       <v-alert v-if="loading" type="info" class="mt-2" variant="tonal">読み込み中...</v-alert>
       <v-alert v-else-if="errorMessage" type="error" class="mt-2" variant="tonal">
         {{ errorMessage }}
       </v-alert>
       <v-alert v-else-if="!filePath" type="info" class="mt-2" variant="tonal">
         VRMファイルを選択するとここに表示されます。
+      </v-alert>
+      <v-alert v-else type="info" class="mt-2" variant="tonal">
+        {{ animationStatus }}
       </v-alert>
     </v-card-text>
   </v-card>

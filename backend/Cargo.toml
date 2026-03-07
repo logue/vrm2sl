@@ -4,7 +4,7 @@ version = "0.8.0"
 default-run = "vrm2sl-tauri"
 authors = ["Logue <logue@hotmail.co.jp>"]
 edition = "2024"
-rust-version = "1.93.1"
+rust-version = "1.94.0"
 description = "VRM to Second Life converter desktop backend"
 readme = "../README.md"
 repository = "https://github.com/logue/vrm2sl"
@@ -18,7 +18,7 @@ name = "vrm2sl_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.5", features = [] }
+tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
 anyhow = "1.0.102"
@@ -28,9 +28,9 @@ image = "0.25.9"
 serde = "1.0.228"
 serde_json = "1.0.149"
 thiserror = "2.0.18"
-jiff = { version = "0.2.21", features = ["serde"] }
+jiff = { version = "0.2.23", features = ["serde"] }
 
-tauri = { version = "2.10.2", features = [] }
+tauri = { version = "2.10.3", features = [] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"
 tauri-plugin-log = "2.8.0"
