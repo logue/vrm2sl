@@ -17,7 +17,14 @@ const canvasHost = ref<HTMLDivElement | null>(null);
 const errorMessage = ref('');
 const loading = ref(false);
 const animationEnabled = ref(false);
-const animationStatus = ref('待機モーションは無効です');
+const animationStatus = ref('モーションは無効です');
+
+type MotionMode = 'idle' | 'walk';
+type AvatarGender = 'female' | 'male' | 'unknown';
+
+const selectedMotionMode = ref<MotionMode>('idle');
+const avatarGender = ref<AvatarGender>('unknown');
+const currentMotionPath = ref('/animations/avatar_stand_1.bvh');
 
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
@@ -28,9 +35,14 @@ let resizeObserver: ResizeObserver | null = null;
 let animationFrameId = 0;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 let clock: THREE.Clock | null = null;
-let bvhIdleClip: THREE.AnimationClip | null = null;
+let bvhMotionClip: THREE.AnimationClip | null = null;
 let mixer: THREE.AnimationMixer | null = null;
-let activeActions: THREE.AnimationAction[] = [];
+const bvhClipCache: Map<string, THREE.AnimationClip> = new Map();
+
+const MOTION_MODE_ITEMS = [
+  { title: '待機', value: 'idle' as MotionMode },
+  { title: '歩行', value: 'walk' as MotionMode }
+];
 
 const BVH_TO_SL_BONE: Record<string, string> = {
   hip: 'mPelvis',
@@ -65,6 +77,93 @@ const HAND_PROBLEM_BONES = new Set([
   'mWristRight'
 ]);
 
+const parseGlbJsonChunk = (bytes: Uint8Array): Record<string, unknown> | null => {
+  if (bytes.length < 20) {
+    return null;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = view.getUint32(0, true);
+  // ASCII "glTF" in little-endian.
+  if (magic !== 0x46546c67) {
+    return null;
+  }
+
+  const jsonChunkLength = view.getUint32(12, true);
+  const jsonChunkType = view.getUint32(16, true);
+  // JSON chunk type ASCII "JSON" in little-endian.
+  if (jsonChunkType !== 0x4e4f534a || 20 + jsonChunkLength > bytes.length) {
+    return null;
+  }
+
+  const jsonBytes = bytes.slice(20, 20 + jsonChunkLength);
+  const decoder = new TextDecoder();
+  try {
+    return JSON.parse(decoder.decode(jsonBytes)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
+
+const detectGenderFromVrm = async (path: string): Promise<AvatarGender> => {
+  if (!path) {
+    return 'unknown';
+  }
+
+  try {
+    const bytes = await readFile(path);
+    const json = parseGlbJsonChunk(bytes);
+    if (!json) {
+      return 'unknown';
+    }
+
+    const extensions = (json.extensions ?? {}) as Record<string, unknown>;
+    const vrm0Meta =
+      ((extensions.VRM as Record<string, unknown> | undefined)?.meta as
+        | Record<string, unknown>
+        | undefined) ?? {};
+    const vrm1Meta =
+      ((extensions.VRMC_vrm as Record<string, unknown> | undefined)?.meta as
+        | Record<string, unknown>
+        | undefined) ?? {};
+
+    const raw =
+      (vrm0Meta.sex as string | undefined) ??
+      (vrm0Meta.gender as string | undefined) ??
+      (vrm1Meta.sex as string | undefined) ??
+      (vrm1Meta.gender as string | undefined) ??
+      '';
+    const value = raw.toLowerCase();
+
+    if (value.includes('female') || value.includes('woman') || value.includes('girl')) {
+      return 'female';
+    }
+    if (value.includes('male') || value.includes('man') || value.includes('boy')) {
+      return 'male';
+    }
+  } catch {
+    // Fall through to unknown when metadata cannot be parsed.
+  }
+
+  return 'unknown';
+};
+
+const resolveMotionPath = (mode: MotionMode, gender: AvatarGender): string => {
+  if (mode === 'walk') {
+    if (gender === 'female') {
+      return '/animations/avatar_female_walk.bvh';
+    }
+    return '/animations/avatar_walk.bvh';
+  }
+
+  // Use multi-frame stand so preview clearly animates.
+  return '/animations/avatar_stand_1.bvh';
+};
+
+const applyMotionSelection = () => {
+  currentMotionPath.value = resolveMotionPath(selectedMotionMode.value, avatarGender.value);
+};
+
 const updateRendererSize = () => {
   if (!canvasHost.value || !renderer || !camera) {
     return;
@@ -84,8 +183,6 @@ const clearModel = () => {
     mixer.uncacheRoot(mixer.getRoot());
     mixer = null;
   }
-  activeActions = [];
-
   if (!scene || !modelRoot) {
     return;
   }
@@ -143,7 +240,7 @@ const ensureEyeMaterialsVisible = (root: THREE.Object3D) => {
       }
 
       if (isEyeSurface) {
-        material.alphaTest = 0.0;
+        material.alphaTest = 0;
         material.transparent = true;
         material.depthWrite = false;
         // Keep normal depth test so overall mesh ordering stays natural.
@@ -202,13 +299,13 @@ const parseBvhTrack = (trackName: string): { bone: string; property: string } | 
 };
 
 const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationClip | null => {
-  if (!bvhIdleClip) {
+  if (!bvhMotionClip) {
     return null;
   }
 
   const tracks: THREE.KeyframeTrack[] = [];
 
-  for (const track of bvhIdleClip.tracks) {
+  for (const track of bvhMotionClip.tracks) {
     const parsed = parseBvhTrack(track.name);
     if (!parsed) {
       continue;
@@ -246,7 +343,7 @@ const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationCli
     return null;
   }
 
-  return new THREE.AnimationClip('avatar_stand_retargeted', bvhIdleClip.duration, tracks);
+  return new THREE.AnimationClip('avatar_motion_retargeted', bvhMotionClip.duration, tracks);
 };
 
 const applyIdleAnimation = () => {
@@ -254,8 +351,8 @@ const applyIdleAnimation = () => {
     return;
   }
 
-  if (!bvhIdleClip) {
-    animationStatus.value = '待機モーション読み込み待ちです。';
+  if (!bvhMotionClip) {
+    animationStatus.value = 'モーション読み込み待ちです。';
     return;
   }
 
@@ -269,8 +366,6 @@ const applyIdleAnimation = () => {
     mixer.stopAllAction();
     mixer.uncacheRoot(mixer.getRoot());
   }
-  activeActions = [];
-
   mixer = new THREE.AnimationMixer(modelRoot);
 
   let appliedMeshCount = 0;
@@ -294,7 +389,6 @@ const applyIdleAnimation = () => {
     action.clampWhenFinished = false;
     action.enabled = true;
     action.play();
-    activeActions.push(action);
   }
 
   if (appliedMeshCount === 0) {
@@ -320,24 +414,31 @@ const stopIdleAnimation = () => {
   mixer.stopAllAction();
   mixer.setTime(0);
   mixer = null;
-  activeActions = [];
   resetSkinnedMeshesToBindPose();
   animationStatus.value = '待機モーション停止中';
 };
 
-const loadIdleBvh = async () => {
+const loadSelectedBvh = async () => {
+  const motionPath = currentMotionPath.value;
   try {
-    const loader = new BVHLoader();
-    const result = await loader.loadAsync('/animations/avatar_stand.bvh');
-    bvhIdleClip = result.clip;
-    animationStatus.value = `待機モーション読込済み (frames: ${Math.round(result.clip.duration)})`;
+    const cached = bvhClipCache.get(motionPath);
+    if (cached) {
+      bvhMotionClip = cached;
+      animationStatus.value = `モーション読込済み: ${motionPath.split('/').pop()} (frames: ${Math.max(...cached.tracks.map(t => t.times.length), 0)})`;
+    } else {
+      const loader = new BVHLoader();
+      const result = await loader.loadAsync(motionPath);
+      bvhMotionClip = result.clip;
+      bvhClipCache.set(motionPath, result.clip);
+      animationStatus.value = `モーション読込済み: ${motionPath.split('/').pop()} (frames: ${Math.max(...result.clip.tracks.map(t => t.times.length), 0)})`;
+    }
 
     if (modelRoot && animationEnabled.value) {
       applyIdleAnimation();
     }
   } catch (error) {
-    bvhIdleClip = null;
-    animationStatus.value = `待機モーション読込失敗: ${String(error)}`;
+    bvhMotionClip = null;
+    animationStatus.value = `モーション読込失敗 (${motionPath}): ${String(error)}`;
   }
 };
 
@@ -376,6 +477,9 @@ const loadPreviewModel = async (path: string, options: ConvertOptions) => {
   errorMessage.value = '';
 
   try {
+    avatarGender.value = await detectGenderFromVrm(path);
+    applyMotionSelection();
+
     const previewPath = await invoke<string>('build_preview_glb_command', {
       request: {
         input_path: path,
@@ -417,7 +521,12 @@ const loadPreviewModel = async (path: string, options: ConvertOptions) => {
     fitCameraToModel(modelRoot);
 
     if (animationEnabled.value) {
-      applyIdleAnimation();
+      bvhMotionClip = bvhClipCache.get(currentMotionPath.value) ?? null;
+      if (bvhMotionClip) {
+        applyIdleAnimation();
+      } else {
+        await loadSelectedBvh();
+      }
     }
   } catch (error) {
     errorMessage.value = `Preview failed: ${String(error)}`;
@@ -451,6 +560,8 @@ onMounted(() => {
     return;
   }
 
+  applyMotionSelection();
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1f1f1f);
 
@@ -474,7 +585,7 @@ onMounted(() => {
   scene.add(ambient);
 
   const directional = new THREE.DirectionalLight(0xffffff, 0.9);
-  directional.position.set(1.5, 2.5, 2.0);
+  directional.position.set(1.5, 2.5, 2);
   scene.add(directional);
 
   const grid = new THREE.GridHelper(10, 20, 0x555555, 0x333333);
@@ -527,14 +638,31 @@ watch(
   () => animationEnabled.value,
   enabled => {
     if (enabled) {
-      if (!bvhIdleClip) {
-        void loadIdleBvh();
+      applyMotionSelection();
+      if (!bvhMotionClip || !bvhClipCache.has(currentMotionPath.value)) {
+        void loadSelectedBvh();
       } else {
+        bvhMotionClip = bvhClipCache.get(currentMotionPath.value) ?? null;
         applyIdleAnimation();
       }
       return;
     }
     stopIdleAnimation();
+  }
+);
+
+watch(
+  () => selectedMotionMode.value,
+  () => {
+    applyMotionSelection();
+    bvhMotionClip = bvhClipCache.get(currentMotionPath.value) ?? null;
+    if (animationEnabled.value) {
+      if (bvhMotionClip) {
+        applyIdleAnimation();
+      } else {
+        void loadSelectedBvh();
+      }
+    }
   }
 );
 
@@ -551,7 +679,7 @@ onBeforeUnmount(() => {
   renderer?.dispose();
 
   if (renderer?.domElement.parentElement) {
-    renderer.domElement.parentElement.removeChild(renderer.domElement);
+    renderer.domElement.remove();
   }
 
   scene = null;
@@ -572,13 +700,26 @@ onBeforeUnmount(() => {
     <v-card-text>
       <div ref="canvasHost" class="preview-host" />
       <div class="d-flex flex-wrap ga-3 align-center mt-3">
+        <v-select
+          v-model="selectedMotionMode"
+          :items="MOTION_MODE_ITEMS"
+          item-title="title"
+          item-value="value"
+          density="compact"
+          hide-details
+          label="モーション"
+          style="max-width: 180px"
+        />
         <v-switch
           v-model="animationEnabled"
           color="primary"
           density="compact"
           hide-details
-          label="待機モーション (avatar_stand.bvh)"
+          :label="`モーション再生 (${currentMotionPath.split('/').pop()})`"
         />
+      </div>
+      <div class="text-caption text-medium-emphasis mt-1">
+        性別判定: {{ avatarGender }} / 自動選択: {{ currentMotionPath.split('/').pop() }}
       </div>
       <v-alert v-if="loading" type="info" class="mt-2" variant="tonal">読み込み中...</v-alert>
       <v-alert v-else-if="errorMessage" type="error" class="mt-2" variant="tonal">
