@@ -66,16 +66,14 @@ const BVH_TO_SL_BONE: Record<string, string> = {
   rFoot: 'mAnkleRight'
 };
 
-const HAND_PROBLEM_BONES = new Set([
-  'mCollarLeft',
-  'mShoulderLeft',
-  'mElbowLeft',
-  'mWristLeft',
-  'mCollarRight',
-  'mShoulderRight',
-  'mElbowRight',
-  'mWristRight'
-]);
+const HAND_PROBLEM_BONES = new Set(['mWristLeft', 'mWristRight']);
+
+type IdleBoneMotion = {
+  boneName: string;
+  xAngles: number[];
+  yAngles: number[];
+  zAngles: number[];
+};
 
 const parseGlbJsonChunk = (bytes: Uint8Array): Record<string, unknown> | null => {
   if (bytes.length < 20) {
@@ -321,8 +319,8 @@ const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationCli
     }
 
     // BVH wrist orientation and VRM hand/thumb bind axes are often different.
-    // Applying wrist rotation directly can cause thumb collapse in preview,
-    // so wrist tracks are skipped for deformation diagnostics.
+    // Keep collar/shoulder/elbow animation, but skip wrist twist to avoid
+    // severe hand collapse while still animating upper body.
     if (parsed.property === 'quaternion' && HAND_PROBLEM_BONES.has(targetBoneName)) {
       continue;
     }
@@ -346,12 +344,95 @@ const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationCli
   return new THREE.AnimationClip('avatar_motion_retargeted', bvhMotionClip.duration, tracks);
 };
 
+const buildProceduralIdleClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationClip | null => {
+  // 4秒ループ。0,2,4秒で同じ姿勢に戻して継ぎ目を消す。
+  const times = [0, 1, 2, 3, 4];
+  const motions: IdleBoneMotion[] = [
+    {
+      boneName: 'mTorso',
+      xAngles: [0, 1, 0, -1, 0],
+      yAngles: [0, 0.4, 0, -0.4, 0],
+      zAngles: [0, 0.2, 0, -0.2, 0]
+    },
+    {
+      boneName: 'mChest',
+      xAngles: [0, 2.2, 0, -2.2, 0],
+      yAngles: [0, 0.6, 0, -0.6, 0],
+      zAngles: [0, 0.4, 0, -0.4, 0]
+    },
+    {
+      boneName: 'mNeck',
+      xAngles: [0, 1, 0, -1, 0],
+      yAngles: [0, -1.2, 0, 1.2, 0],
+      zAngles: [0, 0.5, 0, -0.5, 0]
+    },
+    {
+      boneName: 'mHead',
+      xAngles: [0, 0.7, 0, -0.7, 0],
+      yAngles: [0, 1.8, 0, -1.8, 0],
+      zAngles: [0, -0.8, 0, 0.8, 0]
+    },
+    {
+      boneName: 'mCollarLeft',
+      xAngles: [0, -0.9, 0, 0.9, 0],
+      yAngles: [0, 0.4, 0, -0.4, 0],
+      zAngles: [0, -0.7, 0, 0.7, 0]
+    },
+    {
+      boneName: 'mCollarRight',
+      xAngles: [0, -0.9, 0, 0.9, 0],
+      yAngles: [0, -0.4, 0, 0.4, 0],
+      zAngles: [0, 0.7, 0, -0.7, 0]
+    }
+  ];
+
+  const toQuaternionValues = (xAngles: number[], yAngles: number[], zAngles: number[]) => {
+    const values: number[] = [];
+    for (let i = 0; i < times.length; i += 1) {
+      const xAngle = xAngles.at(i) ?? 0;
+      const yAngle = yAngles.at(i) ?? 0;
+      const zAngle = zAngles.at(i) ?? 0;
+      const q = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          THREE.MathUtils.degToRad(xAngle),
+          THREE.MathUtils.degToRad(yAngle),
+          THREE.MathUtils.degToRad(zAngle),
+          'XYZ'
+        )
+      );
+      values.push(q.x, q.y, q.z, q.w);
+    }
+    return values;
+  };
+
+  const tracks: THREE.KeyframeTrack[] = [];
+  for (const motion of motions) {
+    if (!targetSkeleton.getBoneByName(motion.boneName)) {
+      continue;
+    }
+    tracks.push(
+      new THREE.QuaternionKeyframeTrack(
+        `.bones[${motion.boneName}].quaternion`,
+        times,
+        toQuaternionValues(motion.xAngles, motion.yAngles, motion.zAngles)
+      )
+    );
+  }
+
+  if (tracks.length === 0) {
+    return null;
+  }
+
+  return new THREE.AnimationClip('avatar_idle_synth', times[times.length - 1] ?? 4, tracks);
+};
+
 const applyIdleAnimation = () => {
   if (!modelRoot || !animationEnabled.value) {
     return;
   }
 
-  if (!bvhMotionClip) {
+  const allowProceduralIdle = selectedMotionMode.value === 'idle';
+  if (!bvhMotionClip && !allowProceduralIdle) {
     animationStatus.value = 'モーション読み込み待ちです。';
     return;
   }
@@ -371,24 +452,41 @@ const applyIdleAnimation = () => {
   let appliedMeshCount = 0;
   let appliedTrackCount = 0;
   let maxKeyframes = 0;
+  let proceduralApplied = false;
 
   for (const skinnedMesh of skinnedMeshes) {
     const retargeted = buildRetargetedClip(skinnedMesh.skeleton);
-    if (!retargeted) {
+    const proceduralIdle = allowProceduralIdle
+      ? buildProceduralIdleClip(skinnedMesh.skeleton)
+      : null;
+
+    if (!retargeted && !proceduralIdle) {
       continue;
     }
 
     appliedMeshCount += 1;
-    appliedTrackCount += retargeted.tracks.length;
-    for (const track of retargeted.tracks) {
-      maxKeyframes = Math.max(maxKeyframes, track.times.length);
-    }
 
-    const action = mixer.clipAction(retargeted, skinnedMesh);
-    action.setLoop(THREE.LoopRepeat, Infinity);
-    action.clampWhenFinished = false;
-    action.enabled = true;
-    action.play();
+    const playClip = (clip: THREE.AnimationClip, weight: number) => {
+      appliedTrackCount += clip.tracks.length;
+      for (const track of clip.tracks) {
+        maxKeyframes = Math.max(maxKeyframes, track.times.length);
+      }
+
+      const action = mixer!.clipAction(clip, skinnedMesh);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+      action.enabled = true;
+      action.setEffectiveWeight(weight);
+      action.play();
+    };
+
+    if (retargeted) {
+      playClip(retargeted, proceduralIdle ? 0.85 : 1);
+    }
+    if (proceduralIdle) {
+      proceduralApplied = true;
+      playClip(proceduralIdle, retargeted ? 0.35 : 1);
+    }
   }
 
   if (appliedMeshCount === 0) {
@@ -396,12 +494,14 @@ const applyIdleAnimation = () => {
     return;
   }
 
+  const modeLabel = selectedMotionMode.value === 'walk' ? '歩行' : '待機';
+
   if (maxKeyframes <= 1) {
-    animationStatus.value = `待機ポーズ適用中（このBVHは1フレームのため静止） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}`;
+    animationStatus.value = `${modeLabel}ポーズ適用中（1フレームBVH） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}${proceduralApplied ? ' + synth idle' : ''}`;
     return;
   }
 
-  animationStatus.value = `待機モーション再生中（回転のみ） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}`;
+  animationStatus.value = `${modeLabel}モーション再生中（回転のみ） meshes: ${appliedMeshCount}, tracks: ${appliedTrackCount}${proceduralApplied ? ' + synth idle' : ''}`;
 };
 
 const stopIdleAnimation = () => {

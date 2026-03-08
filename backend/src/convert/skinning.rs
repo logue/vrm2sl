@@ -226,6 +226,131 @@ pub(super) fn optimize_skinning_weights_and_joints(json: &mut Value, bin: &mut [
     Ok(())
 }
 
+/// Stabilize tiny head/eye-only secondary skins by forcing a single `mHead`
+/// bind inside each skin.
+///
+/// This avoids importer instability with tiny facial skins that include eye
+/// joints while keeping skin-index topology unchanged.
+pub(super) fn collapse_secondary_head_skins_to_primary(
+    json: &mut Value,
+    bin: &mut [u8],
+    humanoid_bone_nodes: &HashMap<String, usize>,
+) {
+    let Some(skins) = json.get("skins").and_then(Value::as_array) else {
+        return;
+    };
+    if skins.len() <= 1 {
+        return;
+    }
+
+    let primary_skin_index = skins
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, skin)| {
+            skin.get("joints")
+                .and_then(Value::as_array)
+                .map(|j| j.len())
+                .unwrap_or(0)
+        })
+        .map(|(i, _)| i);
+    let Some(primary_skin_index) = primary_skin_index else {
+        return;
+    };
+
+    let Some(head_node_index) = humanoid_bone_nodes.get("head").copied() else {
+        return;
+    };
+
+    let mut used_skin_indices = HashSet::<usize>::new();
+    if let Some(nodes) = json.get("nodes").and_then(Value::as_array) {
+        for node in nodes {
+            if let Some(si) = node.get("skin").and_then(Value::as_u64).map(|v| v as usize) {
+                used_skin_indices.insert(si);
+            }
+        }
+    }
+
+    for skin_index in 0..skins.len() {
+        if skin_index == primary_skin_index || !used_skin_indices.contains(&skin_index) {
+            continue;
+        }
+
+        let joints: Vec<usize> = json["skins"][skin_index]["joints"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if joints.is_empty() {
+            continue;
+        }
+
+        // Limit to tiny head/eye-only skins so body limb skins are untouched.
+        let is_tiny_head_skin = joints.len() <= 4
+            && joints.iter().all(|&node_idx| {
+                let name = json["nodes"][node_idx]
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                matches!(name, "mHead" | "mEyeLeft" | "mEyeRight")
+            });
+        if !is_tiny_head_skin {
+            continue;
+        }
+
+        let bindings = collect_skin_primitive_bindings(json, skin_index);
+        for binding in bindings {
+            let Some(joints_meta) = accessor_meta(json, binding.joints_accessor) else {
+                continue;
+            };
+            let Some(weights_meta) = accessor_meta(json, binding.weights_accessor) else {
+                continue;
+            };
+            if joints_meta.accessor_type != "VEC4" || weights_meta.accessor_type != "VEC4" {
+                continue;
+            }
+            if !(joints_meta.component_type == 5121 || joints_meta.component_type == 5123) {
+                continue;
+            }
+            if weights_meta.component_type != 5126 {
+                continue;
+            }
+
+            let count = joints_meta.count.min(weights_meta.count);
+            for vertex_index in 0..count {
+                let _ = write_joint_slot(bin, &joints_meta, vertex_index, 0, 0);
+                let _ = write_joint_slot(bin, &joints_meta, vertex_index, 1, 0);
+                let _ = write_joint_slot(bin, &joints_meta, vertex_index, 2, 0);
+                let _ = write_joint_slot(bin, &joints_meta, vertex_index, 3, 0);
+
+                let _ = write_weight_f32(bin, &weights_meta, vertex_index, 0, 1.0);
+                let _ = write_weight_f32(bin, &weights_meta, vertex_index, 1, 0.0);
+                let _ = write_weight_f32(bin, &weights_meta, vertex_index, 2, 0.0);
+                let _ = write_weight_f32(bin, &weights_meta, vertex_index, 3, 0.0);
+            }
+        }
+
+        // Rewrite this skin to a single-joint mHead bind.
+        if let Some(skins_mut) = json.get_mut("skins").and_then(Value::as_array_mut)
+            && let Some(skin_mut) = skins_mut.get_mut(skin_index)
+        {
+            skin_mut["joints"] = Value::Array(vec![Value::from(head_node_index as u64)]);
+
+            if let Some(acc_idx) = skin_mut
+                .get("inverseBindMatrices")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+                && let Some(accessors) = json.get_mut("accessors").and_then(Value::as_array_mut)
+                && let Some(accessor) = accessors.get_mut(acc_idx)
+            {
+                accessor["count"] = Value::from(1u64);
+            }
+        }
+    }
+}
+
 fn collect_skin_primitive_bindings(json: &Value, skin_index: usize) -> Vec<PrimitiveSkinBinding> {
     let nodes = json
         .get("nodes")

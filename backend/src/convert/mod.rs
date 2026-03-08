@@ -33,7 +33,10 @@ use skeleton::{
     regenerate_inverse_bind_matrices, rename_bones, set_skin_skeleton_root,
     validate_bone_conversion_preconditions,
 };
-use skinning::{optimize_skinning_weights_and_joints, remap_unmapped_bone_weights};
+use skinning::{
+    collapse_secondary_head_skins_to_primary, optimize_skinning_weights_and_joints,
+    remap_unmapped_bone_weights,
+};
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
     collect_parent_index_map, estimate_texture_fee, extract_author, extract_humanoid_bone_nodes,
@@ -359,6 +362,7 @@ fn transform_and_write_glb(
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Clean up wrapper nodes above mPelvis.  Keeps the topmost non-SL
     // ancestor as an identity-transform root so that skin.skeleton can
     // reference a node with no positional offset, preventing the SL viewer

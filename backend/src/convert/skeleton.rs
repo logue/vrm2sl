@@ -595,7 +595,11 @@ fn collect_primitives_for_skin_with_attributes(
         .cloned()
         .unwrap_or_default();
 
-    let mut seen = HashSet::<(usize, usize)>::new();
+    // Deduplicate by full accessor tuple. Different primitives may reuse
+    // JOINTS/WEIGHTS while pointing to different POSITION/NORMAL accessors;
+    // collapsing only by (JOINTS, WEIGHTS) would skip geometry correction for
+    // those primitives and can cause detached/flickering parts (e.g. face/eyes).
+    let mut seen = HashSet::<(usize, usize, Option<usize>, Option<usize>)>::new();
     let mut bindings = Vec::new();
 
     for node in nodes {
@@ -633,9 +637,6 @@ fn collect_primitives_for_skin_with_attributes(
             else {
                 continue;
             };
-            if !seen.insert((jnt_acc, wgt_acc)) {
-                continue;
-            }
             let pos_acc = attrs
                 .get("POSITION")
                 .and_then(Value::as_u64)
@@ -644,6 +645,9 @@ fn collect_primitives_for_skin_with_attributes(
                 .get("NORMAL")
                 .and_then(Value::as_u64)
                 .map(|v| v as usize);
+            if !seen.insert((jnt_acc, wgt_acc, pos_acc, norm_acc)) {
+                continue;
+            }
             bindings.push(PrimitiveBindingWithAttributes {
                 joints_accessor: jnt_acc,
                 weights_accessor: wgt_acc,
@@ -861,21 +865,18 @@ pub(super) fn promote_pelvis_to_scene_root(
 /// skeleton root."  It does NOT require the skeleton root to be listed in the
 /// skin's `joints` array.
 ///
-/// When an identity-root node exists above mPelvis, we point every skin's
-/// `skeleton` to that node.  Because the identity root has a pure identity
-/// transform, the SL viewer (and other importers that multiply the skeleton
-/// root's transform into the skinning equation) will not inject any unwanted
-/// offset.  All joints still resolve to their correct world positions through
-/// the normal parent-chain traversal.
+/// For Second Life compatibility, prefer `mPelvis` when available even if an
+/// identity wrapper root exists. Some importers/viewers treat non-bone wrapper
+/// roots differently and can introduce offsets/flicker around head/face skins.
 ///
-/// When no identity root is available (i.e. `promote_pelvis_to_scene_root`
-/// found no wrapper ancestors) we fall back to mPelvis itself.
+/// The optional `identity_root` is kept only as a fallback for models where
+/// hips are unavailable for any reason.
 pub(super) fn set_skin_skeleton_root(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
     identity_root: Option<usize>,
 ) {
-    let skeleton_index = identity_root.or_else(|| humanoid_bone_nodes.get("hips").copied());
+    let skeleton_index = humanoid_bone_nodes.get("hips").copied().or(identity_root);
 
     let skins = match json["skins"].as_array_mut() {
         Some(s) => s,
