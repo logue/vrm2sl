@@ -223,10 +223,10 @@ const ensureEyeMaterialsVisible = (root: THREE.Object3D) => {
 
     for (const material of materials) {
       const materialName = (material.name ?? '').toLowerCase();
-      const isEyeSurface =
-        materialName.includes('eyeiris') ||
-        materialName.includes('eyewhite') ||
-        materialName.includes('eyehighlight');
+      const isEyeIris = materialName.includes('eyeiris');
+      const isEyeWhite = materialName.includes('eyewhite');
+      const isEyeHighlight = materialName.includes('eyehighlight');
+      const isEyeSurface = isEyeIris || isEyeWhite || isEyeHighlight;
       const isEyelashLike =
         materialName.includes('faceeyeline') ||
         materialName.includes('eyelash') ||
@@ -237,16 +237,21 @@ const ensureEyeMaterialsVisible = (root: THREE.Object3D) => {
         continue;
       }
 
-      if (isEyeSurface) {
+      if (isEyeIris || isEyeHighlight) {
+        // Iris/highlight are often near-coplanar with eye-white.
+        // Slightly prioritize them to avoid being buried by depth fighting.
         material.alphaTest = 0;
         material.transparent = true;
-        material.depthWrite = false;
-        // Keep normal depth test so overall mesh ordering stays natural.
         material.depthTest = true;
+        material.depthWrite = false;
         material.side = THREE.DoubleSide;
         material.polygonOffset = true;
-        material.polygonOffsetFactor = -1;
-        material.polygonOffsetUnits = -1;
+        material.polygonOffsetFactor = -2;
+        material.polygonOffsetUnits = -2;
+      } else if (isEyeWhite) {
+        material.depthTest = true;
+        material.depthWrite = true;
+        material.polygonOffset = false;
       } else {
         // Eyelashes/brows rely on smooth alpha blending.
         material.alphaTest = 0.02;

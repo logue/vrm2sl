@@ -231,9 +231,12 @@ pub(super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
 ) -> Vec<Matrix4<f32>> {
+    let skip_rotation_normalization: HashSet<&str> = HashSet::from(["leftEye", "rightEye"]);
+
     let sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
+        .filter(|(vrm_name, _)| !skip_rotation_normalization.contains(*vrm_name))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
@@ -371,6 +374,21 @@ pub(super) fn correct_mesh_vertices_for_bind_pose_change(
             })
             .unwrap_or_default();
         if joints.is_empty() {
+            continue;
+        }
+
+        // Face eye skins are very sensitive to over-correction and can drift
+        // toward the nose. Keep tiny head/eye-only skins in their original
+        // authored bind geometry.
+        let is_tiny_face_skin = joints.len() <= 4
+            && joints.iter().all(|&node_idx| {
+                let name = json["nodes"][node_idx]
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                matches!(name, "mHead" | "mEyeLeft" | "mEyeRight")
+            });
+        if is_tiny_face_skin {
             continue;
         }
 
@@ -568,7 +586,10 @@ fn blend_correction_matrix(
         return Matrix4::identity();
     }
 
-    result
+    // Normalize by the effective accumulated weight. Some assets contain
+    // vertices whose weight sum is not exactly 1.0; without normalization,
+    // correction would scale/offset those vertices and can misplace eyes/face.
+    result / total_weight
 }
 
 /// Primitive attribute info for bind-pose correction.

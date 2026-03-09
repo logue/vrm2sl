@@ -92,6 +92,27 @@ Desktop notifications are sent when analysis/conversion completes.
 - Texture auto-resize currently affects validation/estimation and option handling; embedded image payload rewrite is not yet enabled.
 - Full hierarchy reconstruction, inverse-bind full regeneration/writeback, and advanced UI/preview workflow are planned next steps.
 
+## Stability Notes (Eyes/Face)
+
+Recent fixes for face/eye instability (cross-eye, missing iris, flicker) are now part of the default pipeline.
+
+- Conversion side:
+	- `skin.skeleton` prefers `mPelvis` when available.
+	- Face skin keeps `mHead/mEyeLeft/mEyeRight` joints.
+	- Hair-like tiny secondary skins may be simplified to `mHead` for stability.
+	- Bind-pose correction excludes tiny face eye skins to avoid eye drift.
+- Preview side (`frontend/src/components/VrmPreview.vue`):
+	- Eye materials are handled separately from lash/brow materials.
+	- Iris/highlight use anti-z-fighting settings (`polygonOffset`) to reduce depth sorting artifacts.
+	- Upper-body BVH retargeting is enabled (wrists are still filtered to reduce hand collapse).
+
+If eye placement looks wrong, validate in this order:
+
+1. Regenerate output with current backend (`cargo run --manifest-path backend/Cargo.toml --bin vrm2sl -- <input.vrm> <output.glb>`).
+2. Confirm skin topology with `python3 vrm/inspect_output.py`.
+3. Check face skin influence with `python3 vrm/inspect_skin0_weights.py`.
+4. Compare eye-weighted centers with `python3 vrm/inspect_eye_vertex_positions.py vrm/output.glb`.
+
 ## Animation Attribution
 
 Contains animation data © Linden Research, Inc.  

@@ -35,7 +35,7 @@ use skeleton::{
 };
 use skinning::{
     collapse_secondary_head_skins_to_primary, optimize_skinning_weights_and_joints,
-    remap_unmapped_bone_weights,
+    remap_unmapped_bone_weights, soften_face_eye_influences,
 };
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
@@ -362,6 +362,7 @@ fn transform_and_write_glb(
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    soften_face_eye_influences(&json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Clean up wrapper nodes above mPelvis.  Keeps the topmost non-SL
     // ancestor as an identity-transform root so that skin.skeleton can
