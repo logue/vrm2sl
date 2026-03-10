@@ -34,8 +34,8 @@ use skeleton::{
     validate_bone_conversion_preconditions,
 };
 use skinning::{
-    collapse_secondary_head_skins_to_primary, optimize_skinning_weights_and_joints,
-    remap_unmapped_bone_weights, soften_face_eye_influences,
+    collapse_secondary_head_skins_to_primary, merge_head_only_skins_into_primary,
+    optimize_skinning_weights_and_joints, remap_unmapped_bone_weights, soften_face_eye_influences,
 };
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
@@ -362,8 +362,11 @@ fn transform_and_write_glb(
     // in the skin joints list after optimization.
     remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
     optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
-    soften_face_eye_influences(&json, &mut bin);
+    soften_face_eye_influences(&mut json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
+    // Reassign Face and Hair mesh nodes to the primary (Body) skin so that SL
+    // sees a single complete joint list, preventing mHead position conflicts.
+    merge_head_only_skins_into_primary(&mut json, &mut bin);
     // Clean up wrapper nodes above mPelvis.  Keeps the topmost non-SL
     // ancestor as an identity-transform root so that skin.skeleton can
     // reference a node with no positional offset, preventing the SL viewer

@@ -30,6 +30,7 @@ backend/gen/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-.DS_Store
 frontend/src/Meta.ts
-output.gdb
+vrm/output.gdb
+vrm/output_diagnostics.json
+.DS_Store

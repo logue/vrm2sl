@@ -202,6 +202,26 @@ inverse_bind = bind_matrix.inverse()
 - VRM拡張削除
 - 最終的に純粋なglTF 2.0へ
 
+### 8️⃣ Face/Hair スキン圧縮（`soften_face_eye_influences`）
+
+**目的**
+
+Face・Hair メッシュ向けスキンの joints を `[mHead]` のみに圧縮する。
+
+**背景**
+
+VRM の mEyeLeft / mEyeRight ボーンは `normalize_sl_bone_rotations` のスキップリストに含まれており、
+IBM に非ゼロ回転が残る。SL アップローダーはスキン内の全 joints の IBM 第4列から
+ジョイント位置オーバーライドを読み取るため、eye joints が Face skin に残っていると
+誤った位置オフセットが適用され頭部が浮いて見える。
+
+**処理内容**
+
+1. Face 名を持つメッシュにバインドされた skin を特定
+2. 全頂点の joints スロット 0～3 をスロット 0 に統合し、weight[0]=1.0 に設定
+3. `skin.joints` を `[mHead ノードインデックス]` に圧縮
+4. `inverseBindMatrices` アクセサの count を 1 に更新
+
 ---
 
 ## 📐 数学仕様
@@ -420,7 +440,7 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 - [x] 3Dプレビュー（three.js、バックエンド生成GLB表示）
 - [x] エクスポート（.glb出力）
 
-### 🧾 実装済み（2026-02-26時点）
+### 🧾 実装済み（2026-03-10時点）
 
 - [x] Rustバックエンドの解析/変換コマンド（Tauri IPC・CLI）
 - [x] VRM拡張ベースのHumanoidボーン抽出（VRMC_vrm / VRMフォールバック）
@@ -428,6 +448,16 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 - [x] テクスチャ自動縮小ポリシー（1024/2048）と出力後サイズレポート
 - [x] プロジェクト設定の保存/読込
 - [x] 2カラムUI（左:操作 / 右:プレビュー）とログ表示DOM
+- [x] **Face/Hair skin の joints を `[mHead]` のみに圧縮**（`soften_face_eye_influences` 修正）
+  - 修正前: `&Value`（不変参照）のため joints 書き換えがデッドコード化 → mEyeLeft/mEyeRight が Face skin に残存していた
+  - SL はアップロード時に skin.joints 内の全 IBM からジョイント位置を読み取るため、非ゼロ回転を持つ mEyeLeft/mEyeRight の IBM が誤った位置オフセットを生成 → 頭部が浮いて見える問題を引き起こしていた
+  - 修正後: 全頂点スロットをスロット 0 に書き換え、joints を `[mHead]` に圧縮、IBM アクセサカウントを 1 に更新
+- [x] `VrmPreview.vue` に `BVHLoader` を組み込みアニメーション再生を実装
+- [x] ボーン名マッピング実装（SL BVH骨格 ↔ 変換後GLB骨格）
+- [x] プレビューに再生UI追加（待機/歩行モード選択・ループ再生）
+- [x] 待機モーション: `avatar_stand_1.bvh`（BVH再生 + プロシージャルサブモーション合成）
+- [x] 歩行モーション: `avatar_walk.bvh` / `avatar_female_walk.bvh`（性別メタデータで自動選択）
+- [x] 失敗時フォールバック挙動（未読込時メッセージ表示）
 
 ### 📌 残件（マイルストーン別）
 
@@ -450,11 +480,11 @@ SLは身長200cm基準（VRM標準は170cm）のため倍率調整が必須。
 - [x] BVH入力セットを取得（`frontend/public/animations/` に配置済み・120ファイル）
 - [x] アセット配置方針を決定：BVH を `public/animations/` に静的配置、`BVHLoader` で直接読込
 - [ ] 再生対象BVHをリストアップし、カテゴリ分けする（stand/walk/sit/dance など）
-- [ ] `VrmPreview.vue` に `BVHLoader` を組み込みアニメーション再生を実装
-- [ ] プレビューに再生UIを追加（選択・再生・停止・ループ）
+- [x] `VrmPreview.vue` に `BVHLoader` を組み込みアニメーション再生を実装
+- [x] プレビューに再生UIを追加（待機/歩行モード選択）
 - [ ] 再生テストを実施（walk / stand / sit の連続再生確認）
-- [ ] ボーン名マッピング確認（SL BVH骨格 ↔ 変換後GLB骨格）
-- [ ] 失敗時フォールバック挙動を実装（未読込時メッセージ表示）
+- [x] ボーン名マッピング確認・実装（SL BVH骨格 ↔ 変換後GLB骨格）
+- [x] 失敗時フォールバック挙動を実装（未読込時メッセージ表示）
 - [x] 同梱配布する場合の著作権表記テンプレート整備
 - [x] 同梱配布可否のライセンス最終確認（CC BY 3.0）
 
@@ -650,6 +680,57 @@ vrm2sl input.vrm output.glb
 3. アーマチュア崩壊がないか確認
 4. SLへアップロード
 5. アルファで元ボディを消去して動作確認
+
+---
+
+## 🐛 既知の不具合・調査メモ
+
+### Face/Hair スキンの joints 圧縮バグ（修正済み）
+
+**症状：** SL アップロード後、頭部（顔）が胴体から浮いて見える（頭の位置ズレ）
+
+**原因：** `soften_face_eye_influences` 関数が `json: &Value`（不変参照）で定義されていたため、
+`skin.joints` を書き換えるブロックがデッドコードになっていた。
+その結果 Face skin の joints に `[mHead, mEyeLeft, mEyeRight]` が残存し、
+mEyeLeft / mEyeRight の非ゼロ IBM 回転が SL 側でジョイント位置オーバーライドとして誤適用されていた。
+
+**修正：** `json: &mut Value` に変更し、joints の書き換えを有効化（`v0.8.x`）
+
+**確認方法：** 変換後 GLB を Python で解析：
+
+```
+Skin 0 (Face): skeleton=1, joints=['mHead']   # 修正後
+Skin 1 (Body): skeleton=1, joints=47ボーン
+Skin 2 (Hair): skeleton=1, joints=['mHead']   # 修正後
+```
+
+---
+
+### SL BVH の座標系（調査済み）
+
+**前提として間違いやすい点：** SL BVH は Z-up ではなく **Y-up**（glTF と同じ右手座標系）。
+`avatar_walk.bvh` の hip 位置が `(x, 40.59, z)` であり Y が高さ方向であることで確認済み。
+
+**BVH チャンネル順序：** `Xrotation Zrotation Yrotation`（SL 独自慣例）は
+Three.js `BVHLoader` が各チャンネルを個別に `setFromAxisAngle + multiply` で処理するため、
+順序が異なっていても正しいクォータニオンに変換される。座標変換は不要。
+
+**既存の `buildRetargetedClip` の評価：**
+
+- GLB バインドポーズ：全ボーン回転ゼロ（完全 T 字ポーズ、ワールド座標で確認済み）
+- SL BVH リファレンスポーズ：T 字ポーズ前提
+- 両者のリファレンスフレームが一致しているため、追加の座標変換は不要
+- `avatar_stand_1.bvh` は全フレーム回転ゼロ（スタティックポーズ）
+
+**BVH → GLB ボーンマッピング（`BVH_TO_SL_BONE`）：**
+
+```
+hip → mPelvis、abdomen → mTorso、chest → mChest、
+neck → mNeck、head → mHead、
+lShldr → mShoulderLeft、lForeArm → mElbowLeft、lHand → mWristLeft（手首スキップ）…
+```
+
+`neckDummy`（chest → neck 間の SL 中継ボーン）はマッピングなしでスキップされる。
 
 ---
 
