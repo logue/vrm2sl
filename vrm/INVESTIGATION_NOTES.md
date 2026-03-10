@@ -19,7 +19,7 @@ XとYが入れ替わっているように見える。
 ### 2.1 IBMの正確性（全47ボーン）
 
 ```
-検証スクリプト: /tmp/check_all_ibm.py
+検証スクリプト: vrm/check_all_ibm.py
 結果: 全47ボーンのIBM位置 = -(ワールド座標) で一致 ✅
 ```
 
@@ -38,7 +38,7 @@ XとYが入れ替わっているように見える。
 ### 2.2 シーン構造
 
 ```python
-# /tmp/check_scene.py による確認
+# vrm/check_scene.py による確認
 Scene nodes: [0, 91, 92, 93]
 
 Node 0 (Root):      t=[0,0,0], r=[0,0,0,1]  (identity)
@@ -58,7 +58,7 @@ Skin 0,1,2: skeleton=1 (mPelvis)
 ### 2.3 スキンデータ（Body mesh）
 
 ```
-検証スクリプト: /tmp/check_skin_data2.py
+検証スクリプト: vrm/check_skin_data2.py
 ```
 
 - mHipLeft のジョイントインデックス = 41
@@ -70,7 +70,7 @@ Skin 0,1,2: skeleton=1 (mPelvis)
 ### 2.4 BVHアニメーションデータ
 
 ```
-検証スクリプト: /tmp/analyze_walk_bvh.py
+検証スクリプト: vrm/analyze_walk_bvh.py
 対象: avatar_walk.bvh
 ```
 
@@ -107,7 +107,7 @@ BVH lShin オフセット: (-1.359, -18.919, +1.180) cm
 ### 2.7 Node.js シミュレーション（クォータニオン直接コピーのテスト）
 
 ```
-スクリプト: /tmp/test_bvh_retarget.mjs
+スクリプト: vrm/test_bvh_retarget.mjs
 ```
 
 BVH lThigh X回転を直接GLBへ適用した場合の lShin Z座標変化：
@@ -125,7 +125,7 @@ BVH lThigh X回転を直接GLBへ適用した場合の lShin Z座標変化：
 
 ## 3. GLBファイル構造（検証済み）
 
-**ファイル:** `/tmp/avatar_new.glb`（最新変換出力）
+**ファイル:** `vrm/avatar_new.glb`（最新変換出力）
 
 ```
 全ボーン回転: [0,0,0,1]（identity）
@@ -157,8 +157,8 @@ BVH lThigh X回転を直接GLBへ適用した場合の lShin Z座標変化：
 
 SLの座標系テスト用に以下のファイルを作成済み：
 
-- `/tmp/avatar_rot_plus90x.glb` — Root に +90°X 回転（Y-up→Z-up 補正）
-- `/tmp/avatar_rot_minus90x.glb` — Root に -90°X 回転
+- `vrm/avatar_rot_plus90x.glb` — Root に +90°X 回転（Y-up→Z-up 補正）
+- `vrm/avatar_rot_minus90x.glb` — Root に -90°X 回転
 
 これらを SL にアップロードして挙動を確認することで、SL 側の座標変換の有無を確認できる。
 
@@ -268,7 +268,7 @@ const buildRetargetedClip = (
    - それとも SL にアップロードしてから発生するか？
 
 2. **SL テスト（SL側の問題の場合）**
-   - `/tmp/avatar_rot_plus90x.glb` を SL にアップロード
+   - `vrm/avatar_rot_plus90x.glb` を SL にアップロード
    - +90°X 回転でアバターが正常に立つなら SL は Y-up→Z-up 変換を行っている
    - その場合、Rust パイプラインにルート回転を追加する必要がある
 
@@ -280,20 +280,65 @@ const buildRetargetedClip = (
 
 ## 10. 検証スクリプト一覧
 
-| スクリプト                 | 用途                                 |
-| -------------------------- | ------------------------------------ |
-| `check_bind_pose.py`       | GLB のバインドポーズ（IBM）確認      |
-| `check_bvh.py`             | BVH ファイルの構造確認               |
-| `check_glb_bones.py`       | GLB のボーン階層・名前確認           |
-| `check_glb_hierarchy.py`   | GLB のノード階層確認                 |
-| `check_walk_bvh.py`        | BVH 歩行データの回転値確認           |
-| `compare_ibm.py`           | IBM の比較・検証                     |
-| `compare_vrm_ibm.py`       | VRM と変換後 GLB の IBM 比較         |
-| `inspect_detailed.py`      | GLB の詳細インスペクション           |
-| `inspect_eyes.py`          | 目ボーン・メッシュのインスペクション |
-| `inspect_output.py`        | 変換後 GLB の総合インスペクション    |
-| `inspect_skin0_weights.py` | スキンウェイトの確認                 |
-| `inspect_vrm.py`           | VRM 元データのインスペクション       |
+すべてのスクリプトは `vrm/` ディレクトリに格納されています。
+
+### 既存スクリプト
+
+| スクリプト                        | 用途                                              |
+| --------------------------------- | ------------------------------------------------- |
+| `check_bind_pose.py`              | GLB のバインドポーズ（IBM）確認                   |
+| `check_bvh.py`                    | BVH ファイルの構造確認                            |
+| `check_glb_bones.py`              | GLB のボーン階層・名前確認                        |
+| `check_glb_hierarchy.py`          | GLB のノード階層確認                              |
+| `check_walk_bvh.py`               | BVH 歩行データの回転値確認                        |
+| `compare_ibm.py`                  | IBM の比較・検証（元バージョン）                  |
+| `compare_vrm_ibm.py`              | VRM と変換後 GLB の IBM 比較                      |
+| `inspect_detailed.py`             | GLB の詳細インスペクション                        |
+| `inspect_eye_vertex_positions.py` | 目頂点位置のインスペクション                      |
+| `inspect_eyes.py`                 | 目ボーン・メッシュのインスペクション              |
+| `inspect_output.py`               | 変換後 GLB の総合インスペクション（元バージョン） |
+| `inspect_skin0_weights.py`        | スキンウェイトの確認                              |
+| `inspect_vrm.py`                  | VRM 元データのインスペクション                    |
+
+### 調査セッションで追加したスクリプト
+
+| スクリプト                     | 用途                                                    |
+| ------------------------------ | ------------------------------------------------------- |
+| `analyze_axes.py`              | 軸方向の分析                                            |
+| `analyze_walk_bvh.py`          | BVH 歩行データのフレーム別回転値分析                    |
+| `bvh_retarget_analysis.py`     | BVH リターゲット処理の解析                              |
+| `check_all_ibm.py`             | 全47ジョイントの IBM 一括検証                           |
+| `check_coordinate.py`          | Y-up / Z-up 座標系の比較分析                            |
+| `check_ibm.py`                 | IBM 個別チェック                                        |
+| `check_merge.py`               | スキンマージ処理の確認                                  |
+| `check_mesh_skin.py`           | メッシュとスキンの参照関係確認                          |
+| `check_mhead_ibm.py`           | mHead の IBM 確認                                       |
+| `check_scene.py`               | GLB シーン構造（ノード階層）の確認                      |
+| `check_skin_data.py`           | スキン JOINTS_0/WEIGHTS_0 データ確認                    |
+| `check_skin_data2.py`          | スキン JOINTS_0/WEIGHTS_0 詳細確認（mHipLeft検証）      |
+| `check_skin_detail.py`         | スキン詳細インスペクション                              |
+| `check_vrm_face.py`            | VRM 顔メッシュの確認                                    |
+| `check_vrm_legs.py`            | VRM 脚ボーン・メッシュの確認                            |
+| `compare_bone_axes.py`         | VRM と GLB のボーン軸方向比較                           |
+| `compare_ibm_session.py`       | IBM 比較（調査セッション版、`compare_ibm.py` と別内容） |
+| `create_rotation_variants.py`  | ルート回転バリアント GLB の生成                         |
+| `inspect2.py` 〜 `inspect5.py` | 段階的インスペクションスクリプト群                      |
+| `inspect_output_session.py`    | 変換後 GLB インスペクション（調査セッション版）         |
+| `investigate_crab_walk.py`     | 蟹歩き原因調査の統合スクリプト                          |
+| `sim_deform.py`                | スキンデフォームのシミュレーション                      |
+| `test_bvh_retarget.mjs`        | BVH→GLB クォータニオン直接コピーの Node.js 検証         |
+
+### テスト用GLBファイル
+
+| ファイル                                | 内容                                   |
+| --------------------------------------- | -------------------------------------- |
+| `avatar_new.glb`                        | 最新の変換出力（全検証完了済み）       |
+| `avatar_rot_plus90x.glb`                | Root に +90°X 回転（SL Z-up テスト用） |
+| `avatar_rot_minus90x.glb`               | Root に -90°X 回転（SL Z-up テスト用） |
+| `avatar_test.glb` 〜 `avatar_test5.glb` | 各段階の中間変換出力                   |
+| `debug_output.glb`                      | デバッグ用変換出力                     |
+| `fixed_output.glb`                      | 修正適用後の変換出力                   |
+| `output_test.glb`                       | 出力テスト用 GLB                       |
 
 ---
 
