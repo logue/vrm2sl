@@ -301,6 +301,30 @@ const parseBvhTrack = (trackName: string): { bone: string; property: string } | 
   return null;
 };
 
+// Ry(90°) and its inverse, used to remap BVH quaternions from -Z-forward
+// space (Three.js / old GLB) into the +X-forward space of the Ry(90°)-converted
+// GLB skeleton.  Without this, X-axis rotations (e.g. leg forward swing) would
+// appear as sideways rolls in the preview.
+//
+// Conjugate-transform formula: q_glb = ry90 * q_bvh * ry90_inv
+const _ry90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+const _ry90inv = _ry90.clone().invert();
+
+const applyRy90ToQuatTrack = (track: THREE.KeyframeTrack): THREE.KeyframeTrack => {
+  const values = new Float32Array(track.values);
+  const tmp = new THREE.Quaternion();
+  for (let i = 0; i < values.length; i += 4) {
+    tmp.set(values[i], values[i + 1], values[i + 2], values[i + 3]);
+    tmp.premultiply(_ry90).multiply(_ry90inv);
+    values[i] = tmp.x;
+    values[i + 1] = tmp.y;
+    values[i + 2] = tmp.z;
+    values[i + 3] = tmp.w;
+  }
+  // QuaternionKeyframeTrack stores values as a plain number array internally.
+  return new THREE.QuaternionKeyframeTrack(track.name, Array.from(track.times), Array.from(values));
+};
+
 const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationClip | null => {
   if (!bvhMotionClip) {
     return null;
@@ -339,7 +363,13 @@ const buildRetargetedClip = (targetSkeleton: THREE.Skeleton): THREE.AnimationCli
 
     const nextTrack = track.clone();
     nextTrack.name = `.bones[${targetBoneName}].${parsed.property}`;
-    tracks.push(nextTrack);
+
+    // Re-express the BVH quaternion in the +X-forward world of the Ry(90°)-
+    // converted GLB so that leg-swing and arm-swing axes match visually.
+    const corrected =
+      parsed.property === 'quaternion' ? applyRy90ToQuatTrack(nextTrack) : nextTrack;
+    corrected.name = nextTrack.name;
+    tracks.push(corrected);
   }
 
   if (tracks.length === 0) {
@@ -562,7 +592,9 @@ const fitCameraToModel = (root: THREE.Object3D) => {
   const center = box.getCenter(new THREE.Vector3());
   const maxSize = Math.max(size.x, size.y, size.z, 0.1);
 
-  camera.position.set(center.x, center.y + maxSize * 0.4, center.z - maxSize * 1.8);
+  // GLB faces +X after Ry(90°) conversion for SL.
+  // Position camera on the -X side to look at the avatar's front.
+  camera.position.set(center.x - maxSize * 1.8, center.y + maxSize * 0.4, center.z);
   camera.near = Math.max(maxSize / 200, 0.01);
   camera.far = Math.max(maxSize * 200, 1000);
   camera.updateProjectionMatrix();
@@ -671,7 +703,9 @@ onMounted(() => {
   scene.background = new THREE.Color(0x1f1f1f);
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
-  camera.position.set(0, 1.2, 2.5);
+  // GLB is oriented to face +X (Ry90° applied in Rust pipeline for SL).
+  // Place camera on the -X side so the avatar's front is visible.
+  camera.position.set(-2.5, 1.2, 0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -690,7 +724,8 @@ onMounted(() => {
   scene.add(ambient);
 
   const directional = new THREE.DirectionalLight(0xffffff, 0.9);
-  directional.position.set(1.5, 2.5, 2);
+  // Light from the -X side to illuminate the avatar's front face.
+  directional.position.set(-1.5, 2.5, 0.5);
   scene.add(directional);
 
   const grid = new THREE.GridHelper(10, 20, 0x555555, 0x333333);

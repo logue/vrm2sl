@@ -202,48 +202,45 @@ pub(super) fn bake_scale_into_geometry(
 
 // ─── Avatar facing direction fix ──────────────────────────────────────────────
 
-/// Flip the avatar so it faces the canonical glTF **−Z** direction.
+/// Re-orient a VRM avatar from its native **+Z-facing** convention to the
+/// **+X-facing** orientation that Second Life's animation system expects.
 ///
-/// VRoid Studio exports avatars facing **+Z** (face towards the viewer looking
-/// down +Z).  After Second Life applies its Y-up → Z-up conversion (rotate
-/// +90° around the X axis), a +Z-facing avatar ends up pointing **−Y** (south),
-/// but all SL animations assume the avatar faces **+Y** (north).  The resulting
-/// 180° orientation mismatch manifests as a "crab walk" — the avatar's walk
-/// animation pushes it sideways instead of forward.
+/// VRoid Studio exports avatars facing **+Z** (character looks toward +Z).
+/// Second Life's internal reference skeleton assumes the avatar faces **+X**
+/// (East).  The resulting 90° mismatch manifests as a "crab walk" — the
+/// avatar's walk animation pushes it sideways instead of forward.
 ///
-/// Fix: apply **Ry(180°) = diag(−1, 1, −1)** to every spatial quantity in the
-/// GLB, i.e. negate the X and Z components everywhere:
+/// Fix: apply **Ry(90°)** to every spatial quantity in the GLB.
+/// The transformation rule is **(x, y, z) → (z, y, −x)**:
 /// - Node local translations
 /// - Mesh vertex POSITION, NORMAL attributes (VEC3 FLOAT)
-/// - Mesh vertex TANGENT attributes (VEC4 FLOAT — negate X/Z, keep Y/W)
+/// - Mesh vertex TANGENT attributes (VEC4 FLOAT — transform X/Z, keep Y/W)
 /// - Morph-target deltas for POSITION and NORMAL
 ///
-/// Ry(180°) has determinant **+1** (proper rotation), so triangle winding
+/// Ry(90°) has determinant **+1** (proper rotation), so triangle winding
 /// order and texture-coordinate orientation are both preserved.
 ///
 /// Inverse Bind Matrices are **not** touched here; they are regenerated from
 /// the updated world joint positions by a subsequent pipeline stage.
-pub(super) fn flip_avatar_to_negative_z_facing(json: &mut Value, bin: &mut [u8]) -> Result<()> {
-    // ── 1. Flip node translations ─────────────────────────────────────────
+pub(super) fn orient_avatar_for_sl(json: &mut Value, bin: &mut [u8]) -> Result<()> {
+    // ── 1. Rotate node translations via Ry(90°): new_x = old_z, new_z = -old_x
     let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
     for i in 0..node_count {
         if let Some(t) = json["nodes"][i]
             .get_mut("translation")
             .and_then(Value::as_array_mut)
         {
-            if let Some(x) = t[0].as_f64() {
-                t[0] = Value::from(-x);
-            }
-            if let Some(z) = t[2].as_f64() {
-                t[2] = Value::from(-z);
-            }
+            let old_x = t[0].as_f64().unwrap_or(0.0);
+            let old_z = t[2].as_f64().unwrap_or(0.0);
+            t[0] = Value::from(old_z); // new_x = old_z
+            t[2] = Value::from(-old_x); // new_z = -old_x
         }
     }
 
-    // ── 2. Collect accessor indices that need X/Z negation ───────────────
+    // ── 2. Collect accessor indices that need Ry(90°) on X/Z ─────────────
     //
-    // POSITION / NORMAL   → VEC3, negate all 3 components: X(0) Z(2)
-    // TANGENT             → VEC4, negate only X(0) and Z(2); keep Y(1) and W(3)
+    // POSITION / NORMAL → VEC3: new_x = old_z, new_z = -old_x
+    // TANGENT           → VEC4: same for X(0)/Z(2); keep Y(1) and W(3)
     //
     // Using separate sets so we can handle component counts correctly.
     let mut vec3_accessor_indices: HashSet<usize> = HashSet::new(); // POSITION, NORMAL
@@ -291,14 +288,14 @@ pub(super) fn flip_avatar_to_negative_z_facing(json: &mut Value, bin: &mut [u8])
     let accessors = json["accessors"].as_array().cloned().unwrap_or_default();
     let buffer_views = json["bufferViews"].as_array().cloned().unwrap_or_default();
 
-    /// Negate the float components at `component_mask` (0-based indices within
-    /// a single element) for every element of `accessor`.
-    fn negate_components(
+    /// Apply Ry(90°) to the X (component 0) and Z (component 2) float
+    /// components of every element in `accessor`:
+    ///   new_x = old_z,  new_z = −old_x
+    fn ry90_xz(
         accessors: &[Value],
         buffer_views: &[Value],
         bin: &mut [u8],
         acc_idx: usize,
-        component_mask: &[usize],
         expected_type: &str,
     ) {
         let Some(accessor) = accessors.get(acc_idx) else {
@@ -337,33 +334,22 @@ pub(super) fn flip_avatar_to_negative_z_facing(json: &mut Value, bin: &mut [u8])
             if element_offset + default_stride > bin.len() {
                 break;
             }
-            for &comp in component_mask {
-                let byte_pos = element_offset + comp * 4;
-                let v = f32::from_le_bytes(bin[byte_pos..byte_pos + 4].try_into().unwrap());
-                bin[byte_pos..byte_pos + 4].copy_from_slice(&(-v).to_le_bytes());
-            }
+            // Component 0 = X (byte offset 0), component 2 = Z (byte offset 8)
+            let x_byte = element_offset;
+            let z_byte = element_offset + 8;
+            let old_x = f32::from_le_bytes(bin[x_byte..x_byte + 4].try_into().unwrap());
+            let old_z = f32::from_le_bytes(bin[z_byte..z_byte + 4].try_into().unwrap());
+            // Ry(90°): new_x = old_z, new_z = -old_x
+            bin[x_byte..x_byte + 4].copy_from_slice(&old_z.to_le_bytes());
+            bin[z_byte..z_byte + 4].copy_from_slice(&(-old_x).to_le_bytes());
         }
     }
 
     for acc_idx in vec3_accessor_indices {
-        negate_components(
-            &accessors,
-            &buffer_views,
-            bin,
-            acc_idx,
-            &[0, 2], // negate X and Z
-            "VEC3",
-        );
+        ry90_xz(&accessors, &buffer_views, bin, acc_idx, "VEC3");
     }
     for acc_idx in vec4_accessor_indices {
-        negate_components(
-            &accessors,
-            &buffer_views,
-            bin,
-            acc_idx,
-            &[0, 2], // negate X and Z; keep Y and W
-            "VEC4",
-        );
+        ry90_xz(&accessors, &buffer_views, bin, acc_idx, "VEC4");
     }
 
     Ok(())
