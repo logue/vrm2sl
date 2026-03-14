@@ -10,9 +10,7 @@ use super::types::{Severity, ValidationIssue};
 // ─── Mesh statistics ──────────────────────────────────────────────────────────
 
 /// Collect total mesh statistics and hard-limit validation issues.
-pub(super) fn collect_mesh_statistics(
-    document: &Document,
-) -> (usize, usize, Vec<ValidationIssue>) {
+pub(super) fn collect_mesh_statistics(document: &Document) -> (usize, usize, Vec<ValidationIssue>) {
     let mut total_vertices = 0usize;
     let mut total_polygons = 0usize;
     let mut issues = Vec::<ValidationIssue>::new();
@@ -64,8 +62,7 @@ pub(super) fn estimate_height_cm(
 
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
-            let reader =
-                primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| &b.0[..]));
+            let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| &b.0[..]));
             if let Some(positions) = reader.read_positions() {
                 for p in positions {
                     min_y = min_y.min(p[1]);
@@ -198,6 +195,175 @@ pub(super) fn bake_scale_into_geometry(
                 bin[byte_pos..byte_pos + 4].copy_from_slice(&scaled.to_le_bytes());
             }
         }
+    }
+
+    Ok(())
+}
+
+// ─── Avatar facing direction fix ──────────────────────────────────────────────
+
+/// Flip the avatar so it faces the canonical glTF **−Z** direction.
+///
+/// VRoid Studio exports avatars facing **+Z** (face towards the viewer looking
+/// down +Z).  After Second Life applies its Y-up → Z-up conversion (rotate
+/// +90° around the X axis), a +Z-facing avatar ends up pointing **−Y** (south),
+/// but all SL animations assume the avatar faces **+Y** (north).  The resulting
+/// 180° orientation mismatch manifests as a "crab walk" — the avatar's walk
+/// animation pushes it sideways instead of forward.
+///
+/// Fix: apply **Ry(180°) = diag(−1, 1, −1)** to every spatial quantity in the
+/// GLB, i.e. negate the X and Z components everywhere:
+/// - Node local translations
+/// - Mesh vertex POSITION, NORMAL attributes (VEC3 FLOAT)
+/// - Mesh vertex TANGENT attributes (VEC4 FLOAT — negate X/Z, keep Y/W)
+/// - Morph-target deltas for POSITION and NORMAL
+///
+/// Ry(180°) has determinant **+1** (proper rotation), so triangle winding
+/// order and texture-coordinate orientation are both preserved.
+///
+/// Inverse Bind Matrices are **not** touched here; they are regenerated from
+/// the updated world joint positions by a subsequent pipeline stage.
+pub(super) fn flip_avatar_to_negative_z_facing(json: &mut Value, bin: &mut [u8]) -> Result<()> {
+    // ── 1. Flip node translations ─────────────────────────────────────────
+    let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    for i in 0..node_count {
+        if let Some(t) = json["nodes"][i]
+            .get_mut("translation")
+            .and_then(Value::as_array_mut)
+        {
+            if let Some(x) = t[0].as_f64() {
+                t[0] = Value::from(-x);
+            }
+            if let Some(z) = t[2].as_f64() {
+                t[2] = Value::from(-z);
+            }
+        }
+    }
+
+    // ── 2. Collect accessor indices that need X/Z negation ───────────────
+    //
+    // POSITION / NORMAL   → VEC3, negate all 3 components: X(0) Z(2)
+    // TANGENT             → VEC4, negate only X(0) and Z(2); keep Y(1) and W(3)
+    //
+    // Using separate sets so we can handle component counts correctly.
+    let mut vec3_accessor_indices: HashSet<usize> = HashSet::new(); // POSITION, NORMAL
+    let mut vec4_accessor_indices: HashSet<usize> = HashSet::new(); // TANGENT
+
+    if let Some(meshes) = json["meshes"].as_array() {
+        for mesh in meshes {
+            if let Some(primitives) = mesh["primitives"].as_array() {
+                for prim in primitives {
+                    for attr in &["POSITION", "NORMAL"] {
+                        if let Some(idx) = prim
+                            .pointer(&format!("/attributes/{attr}"))
+                            .and_then(Value::as_u64)
+                            .map(|v| v as usize)
+                        {
+                            vec3_accessor_indices.insert(idx);
+                        }
+                    }
+                    if let Some(idx) = prim
+                        .pointer("/attributes/TANGENT")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize)
+                    {
+                        vec4_accessor_indices.insert(idx);
+                    }
+                    // Morph-target deltas
+                    if let Some(targets) = prim["targets"].as_array() {
+                        for target in targets {
+                            for attr in &["POSITION", "NORMAL"] {
+                                if let Some(idx) = target
+                                    .get(*attr)
+                                    .and_then(Value::as_u64)
+                                    .map(|v| v as usize)
+                                {
+                                    vec3_accessor_indices.insert(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let accessors = json["accessors"].as_array().cloned().unwrap_or_default();
+    let buffer_views = json["bufferViews"].as_array().cloned().unwrap_or_default();
+
+    /// Negate the float components at `component_mask` (0-based indices within
+    /// a single element) for every element of `accessor`.
+    fn negate_components(
+        accessors: &[Value],
+        buffer_views: &[Value],
+        bin: &mut [u8],
+        acc_idx: usize,
+        component_mask: &[usize],
+        expected_type: &str,
+    ) {
+        let Some(accessor) = accessors.get(acc_idx) else {
+            return;
+        };
+        if accessor["componentType"].as_u64().unwrap_or(0) != 5126 {
+            return; // must be FLOAT
+        }
+        if accessor["type"].as_str().unwrap_or("") != expected_type {
+            return;
+        }
+        let count = accessor["count"].as_u64().unwrap_or(0) as usize;
+        let bv_idx = match accessor["bufferView"].as_u64().map(|v| v as usize) {
+            Some(i) => i,
+            None => return,
+        };
+        let Some(bv) = buffer_views.get(bv_idx) else {
+            return;
+        };
+        let view_offset = bv["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let acc_offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let num_components: usize = match expected_type {
+            "VEC3" => 3,
+            "VEC4" => 4,
+            _ => return,
+        };
+        let default_stride = num_components * 4;
+        let stride = bv["byteStride"]
+            .as_u64()
+            .map(|v| v as usize)
+            .unwrap_or(default_stride);
+        let base = view_offset + acc_offset;
+
+        for i in 0..count {
+            let element_offset = base + i * stride;
+            if element_offset + default_stride > bin.len() {
+                break;
+            }
+            for &comp in component_mask {
+                let byte_pos = element_offset + comp * 4;
+                let v = f32::from_le_bytes(bin[byte_pos..byte_pos + 4].try_into().unwrap());
+                bin[byte_pos..byte_pos + 4].copy_from_slice(&(-v).to_le_bytes());
+            }
+        }
+    }
+
+    for acc_idx in vec3_accessor_indices {
+        negate_components(
+            &accessors,
+            &buffer_views,
+            bin,
+            acc_idx,
+            &[0, 2], // negate X and Z
+            "VEC3",
+        );
+    }
+    for acc_idx in vec4_accessor_indices {
+        negate_components(
+            &accessors,
+            &buffer_views,
+            bin,
+            acc_idx,
+            &[0, 2], // negate X and Z; keep Y and W
+            "VEC4",
+        );
     }
 
     Ok(())

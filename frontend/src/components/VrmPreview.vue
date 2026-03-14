@@ -562,7 +562,7 @@ const fitCameraToModel = (root: THREE.Object3D) => {
   const center = box.getCenter(new THREE.Vector3());
   const maxSize = Math.max(size.x, size.y, size.z, 0.1);
 
-  camera.position.set(center.x, center.y + maxSize * 0.4, center.z + maxSize * 1.8);
+  camera.position.set(center.x, center.y + maxSize * 0.4, center.z - maxSize * 1.8);
   camera.near = Math.max(maxSize / 200, 0.01);
   camera.far = Math.max(maxSize * 200, 1000);
   camera.updateProjectionMatrix();

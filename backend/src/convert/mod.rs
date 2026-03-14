@@ -26,7 +26,10 @@ use diagnostic::{
     collect_output_texture_infos, diagnostic_log_path_for_output, parse_glb_json,
     write_conversion_diagnostic_log,
 };
-use geometry::{bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm};
+use geometry::{
+    bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm,
+    flip_avatar_to_negative_z_facing,
+};
 use skeleton::{
     correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
     normalize_sl_bone_rotations, promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy,
@@ -381,6 +384,7 @@ fn transform_and_write_glb(
     // means no ambiguity about whether the renderer applies it before or after
     // skinning, and IBMs computed below are all in the final scaled space.
     bake_scale_into_geometry(&mut json, &mut bin, scale_factor)?;
+    flip_avatar_to_negative_z_facing(&mut json, &mut bin)?;
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
