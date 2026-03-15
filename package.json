@@ -30,6 +30,7 @@
     "build:analyze": "pnpm --filter frontend build:analyze",
     "build:clean": "pnpm --recursive exec rimraf dist",
     "build:tauri": "pnpm --filter frontend build:tauri",
+    "build:tauri:mac": "pnpm --filter frontend build:tauri",
     "build:tauri:linux-x64": "pnpm --filter frontend build:tauri:linux-docker-x64",
     "build:tauri:linux-arm64": "pnpm --filter frontend build:tauri:linux-docker-arm64",
     "lint": "pnpm --filter frontend lint",

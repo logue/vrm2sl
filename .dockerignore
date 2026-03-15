@@ -1,0 +1,33 @@
+# Node modules (Docker内で再インストール)
+node_modules
+frontend/node_modules
+
+# Build outputs
+dist
+frontend/dist
+backend/target
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
+.cache
+
+# VRM/Python解析スクリプト（ビルド不要）
+vrm/
