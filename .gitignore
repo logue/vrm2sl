@@ -31,6 +31,7 @@ backend/gen/
 #.idea/
 
 frontend/src/Meta.ts
-vrm/output.gdb
-vrm/output_diagnostics.json
+vrm/*.gdb
+vrm/*.json
 .DS_Store
+/backend/tauri.conf.msi-temp.json

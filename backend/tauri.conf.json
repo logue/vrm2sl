@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "vrm2sl",
-  "mainBinaryName": "Vrm2SL",
   "version": "0.8.0-alpha.0",
   "identifier": "com.vrm2sl",
   "build": {
@@ -60,5 +59,6 @@
         "displayLanguageSelector": true
       }
     }
-  }
+  },
+  "mainBinaryName": "Vrm2SL"
 }
