@@ -47,7 +47,7 @@ const tab = ref('common');
                       <v-card-title>{{ t('common_options') }}</v-card-title>
                       <v-card-text>
                         <!-- Common options content goes here -->
-                        <p>Here you can add common settings for your application.</p>
+                        <p>UNMOUNTED!</p>
                       </v-card-text>
                     </v-card>
                   </v-window-item>

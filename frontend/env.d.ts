@@ -10,13 +10,10 @@ declare module '@/locales/*.yaml' {
 
 /**
  * Vite environment variables available via import.meta.env.
+ * Note: APP_NAME, VERSION, PROJECT_URL are injected as __APP_NAME__, __APP_VERSION__, __PROJECT_SITE__
+ * via vite.config.ts define (see src/types/env.d.ts).
  */
 interface ImportMetaEnv {
-  /**
-   * Optional app title for legacy usage.
-   */
-  readonly VITE_APP_TITLE?: string;
-
   /**
    * Vite runtime flags.
    */

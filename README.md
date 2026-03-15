@@ -17,6 +17,9 @@ cargo install --path backend --bin vrm2sl
 vrm2sl input.vrm output.glb
 ```
 
+> [!IMPORTANT]
+> Do not RESELL or REDISTRIBUTE avatars that include copyrighted assets (such as those sold on [Booth](https://booth.pm/)) on marketplaces. In most cases, use other than for personal use is prohibited.
+
 ### Analyze only (no export)
 
 ```bash
@@ -130,3 +133,15 @@ See [Contributing](CONTRIBUTING.md) for development and coding conventions.
 - Run tests with `cargo test`.
 - Name unit tests in Given/When/Then style for behavior clarity.
 - Example pattern: `given_condition_when_action_then_expected_result`.
+
+## License
+
+©2026 by Logue. Licensed under the [MIT License](LICENSE).
+
+## 🎨 Support This Project
+
+`vrm2sl` is an open-source tool for bridging the VRM avatar ecosystem and Second Life, combining a Rust core pipeline with a Tauri + Vue 3 desktop frontend. Developing and maintaining it requires continuous research into bone mapping, texture policy, and SL-specific quirks.
+
+If this tool saves you time or helps bring your avatar to Second Life, consider sponsoring to support ongoing development.
+
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/logue?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/logue)

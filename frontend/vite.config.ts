@@ -37,6 +37,7 @@ const appNameKebab = loadEnvValue('APP_NAME_KEBAB', 'tauri-vue3-app');
 const appDescription = loadEnvValue('APP_DESCRIPTION', 'A modern desktop application');
 const appSummary = loadEnvValue('APP_SUMMARY', 'Modern desktop application template');
 const authorName = loadEnvValue('AUTHOR_NAME', 'Your Name');
+const projectSite = loadEnvValue('PROJECT_URL', 'https://github.com');
 
 /**
  * Vite Configure
@@ -52,7 +53,8 @@ export default defineConfig(({ command, mode }): UserConfig => {
       'process.env': {},
       // Make .env variables available in Vue components
       __APP_NAME__: JSON.stringify(appName),
-      __APP_VERSION__: JSON.stringify(version)
+      __APP_VERSION__: JSON.stringify(version),
+      __PROJECT_SITE__: JSON.stringify(projectSite)
     },
     plugins: [
       // Vue3

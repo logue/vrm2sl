@@ -12,3 +12,8 @@ declare const __APP_NAME__: string;
  * Application version (from VERSION).
  */
 declare const __APP_VERSION__: string;
+
+/**
+ * Project site URL (from PROJECT_URL).
+ */
+declare const __PROJECT_SITE__: string;

@@ -6,11 +6,12 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 
 const { t } = useI18n();
 
-const APP_NAME = import.meta.env.VITE_APP_NAME || 'My App';
-const PROJECT_SITE = import.meta.env.VITE_PROJECT_SITE || 'https://yourdomain.com/your-app-name';
+const APP_NAME = __APP_NAME__;
+const PROJECT_SITE = __PROJECT_SITE__;
 </script>
 
 <template>
+  <!-- eslint-disable @intlify/vue-i18n/no-raw-text -->
   <v-dialog width="auto">
     <template #activator="{ props: dialogProps }">
       <v-tooltip :text="t('about_title')" location="bottom">
@@ -32,11 +33,18 @@ const PROJECT_SITE = import.meta.env.VITE_PROJECT_SITE || 'https://yourdomain.co
             <br />
             <small>(Build: {{ Meta.date }})</small>
           </p>
+          <p>Donations are appreciated to keep the project alive!</p>
+          <p>
+            <v-btn prepend-icon="mdi-coffee" href="https://ko-fi.com/logue256" target="_blank">
+              Ko-fi
+            </v-btn>
+          </p>
           <p>
             <a :href="PROJECT_SITE" target="_blank" @click.prevent="openUrl(PROJECT_SITE)">
               {{ PROJECT_SITE }}
             </a>
           </p>
+          <hr />
           <p class="text-left text-caption mt-4">
             Contains animation data © Linden Research, Inc.
             <br />
@@ -49,9 +57,6 @@ const PROJECT_SITE = import.meta.env.VITE_PROJECT_SITE || 'https://yourdomain.co
             >
               https://creativecommons.org/licenses/by/3.0/
             </a>
-            <br />
-            <br />
-            Modified for use in this tool.
           </p>
         </v-card-text>
         <v-card-actions>
