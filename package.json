@@ -36,5 +36,8 @@
     "preview": "pnpm --filter frontend preview",
     "type-check": "pnpm --recursive exec vue-tsc --build --force",
     "tauri": "pnpm --filter frontend tauri"
+  },
+  "resolutions": {
+    "yaml": ">=2.3.2"
   }
 }
