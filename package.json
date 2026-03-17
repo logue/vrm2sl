@@ -39,6 +39,6 @@
     "tauri": "pnpm --filter frontend tauri"
   },
   "resolutions": {
-    "yaml": ">=2.3.2"
+    "js-yaml": ">=4.1.1"
   }
 }
