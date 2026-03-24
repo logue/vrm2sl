@@ -145,3 +145,4 @@ See [Contributing](CONTRIBUTING.md) for development and coding conventions.
 If this tool saves you time or helps bring your avatar to Second Life, consider sponsoring to support ongoing development.
 
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/logue?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/logue)
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/vrm2sl)
