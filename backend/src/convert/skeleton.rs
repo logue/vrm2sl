@@ -13,6 +13,35 @@ use super::types::{
     BENTO_BONE_MAP, BENTO_HIERARCHY_RELATIONS, BONE_MAP, CORE_HIERARCHY_RELATIONS, ValidationIssue,
 };
 
+fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
+    if matches!(vrm_bone_name, "leftEye" | "rightEye") {
+        return true;
+    }
+
+    // Keep finger rest rotations so Bento finger curl/twist axes do not drift.
+    const FINGER_BASES: [&str; 10] = [
+        "leftThumb",
+        "leftIndex",
+        "leftMiddle",
+        "leftRing",
+        "leftLittle",
+        "rightThumb",
+        "rightIndex",
+        "rightMiddle",
+        "rightRing",
+        "rightLittle",
+    ];
+
+    const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
+
+    FINGER_BASES.iter().any(|base| {
+        vrm_bone_name.starts_with(base)
+            && FINGER_SEGMENTS
+                .iter()
+                .any(|segment| vrm_bone_name.ends_with(segment))
+    })
+}
+
 // ─── Bone renaming ────────────────────────────────────────────────────────────
 
 /// Rename known bones according to the VRM→SL mapping table.
@@ -231,12 +260,10 @@ pub(super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
 ) -> Vec<Matrix4<f32>> {
-    let skip_rotation_normalization: HashSet<&str> = HashSet::from(["leftEye", "rightEye"]);
-
     let sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
-        .filter(|(vrm_name, _)| !skip_rotation_normalization.contains(*vrm_name))
+        .filter(|(vrm_name, _)| !should_skip_rotation_normalization(vrm_name))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 

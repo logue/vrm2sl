@@ -710,6 +710,38 @@ mod tests {
     }
 
     #[test]
+    fn given_finger_bone_when_normalizing_then_local_rotation_is_preserved() {
+        let original_rotation = vec![
+            Value::from(0.0),
+            Value::from(0.12),
+            Value::from(-0.04),
+            Value::from(0.99),
+        ];
+
+        let mut input_json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mHandIndex1Left",
+                    "rotation": [0.0, 0.12, -0.04, 0.99],
+                    "translation": [0.04, 0.01, -0.02],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            ]
+        });
+
+        let humanoid = HashMap::from([("leftIndexProximal".to_string(), 0usize)]);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+
+        let rotation = input_json
+            .pointer("/nodes/0/rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(rotation, original_rotation);
+    }
+
+    #[test]
     fn given_spine_with_world_xz_offsets_when_normalizing_then_world_positions_are_preserved() {
         let mut json = serde_json::json!({
             "nodes": [
