@@ -7,6 +7,7 @@ use crate::texture::ResizeInterpolation;
 
 /// Blink behavior settings used by lightweight face controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BlinkSettings {
     pub enabled: bool,
     pub interval_sec: f32,
@@ -27,6 +28,7 @@ impl Default for BlinkSettings {
 
 /// Lip-sync behavior settings used by lightweight face controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LipSyncSettings {
     pub enabled: bool,
     pub mode: String,
@@ -47,6 +49,7 @@ impl Default for LipSyncSettings {
 
 /// Eye-tracking behavior settings for preview/control configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EyeTrackingSettings {
     pub camera_follow: bool,
     pub random_look: bool,
@@ -69,6 +72,7 @@ impl Default for EyeTrackingSettings {
 
 /// Grouped face control settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FaceSettings {
     pub blink: BlinkSettings,
     pub lip_sync: LipSyncSettings,
@@ -87,6 +91,7 @@ impl Default for FaceSettings {
 
 /// Finger test/control settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FingerSettings {
     pub enabled: bool,
     pub test_pose: String,
@@ -103,6 +108,7 @@ impl Default for FingerSettings {
 
 /// Persisted project settings used by CLI/UI workflows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProjectSettings {
     pub input_path: Option<String>,
     pub output_path: Option<String>,
@@ -110,6 +116,7 @@ pub struct ProjectSettings {
     pub manual_scale: f32,
     pub texture_auto_resize: bool,
     pub texture_resize_method: ResizeInterpolation,
+    pub pbr_enabled: bool,
     pub face: FaceSettings,
     pub fingers: FingerSettings,
 }
@@ -123,6 +130,7 @@ impl Default for ProjectSettings {
             manual_scale: 1.0,
             texture_auto_resize: true,
             texture_resize_method: ResizeInterpolation::Bilinear,
+            pbr_enabled: true,
             face: FaceSettings::default(),
             fingers: FingerSettings::default(),
         }
@@ -156,5 +164,46 @@ mod tests {
         let settings = ProjectSettings::default();
         let json = serde_json::to_string(&settings).expect("serialize settings");
         assert!(json.contains("target_height_cm"));
+    }
+
+    #[test]
+    fn given_legacy_settings_json_when_deserializing_then_new_fields_use_defaults() {
+        let json = r#"{
+            "input_path": null,
+            "output_path": null,
+            "target_height_cm": 200.0,
+            "manual_scale": 1.0,
+            "texture_auto_resize": true,
+            "texture_resize_method": "Bilinear",
+            "face": {
+                "blink": {
+                    "enabled": true,
+                    "interval_sec": 4.0,
+                    "close_duration_sec": 0.15,
+                    "wink_enabled": true
+                },
+                "lip_sync": {
+                    "enabled": false,
+                    "mode": "chat",
+                    "open_angle": 0.5,
+                    "speed": 0.5
+                },
+                "eye_tracking": {
+                    "camera_follow": true,
+                    "random_look": true,
+                    "vertical_range_deg": 25.0,
+                    "horizontal_range_deg": 40.0,
+                    "speed": 0.5
+                }
+            },
+            "fingers": {
+                "enabled": true,
+                "test_pose": "open"
+            }
+        }"#;
+
+        let settings: ProjectSettings = serde_json::from_str(json).expect("deserialize legacy settings");
+
+        assert!(settings.pbr_enabled);
     }
 }

@@ -27,13 +27,14 @@ const settingsPath = ref('project-settings.json');
 
 const options = ref<ConvertOptions>({
   target_height_cm: 200,
-  manual_scale: 1.0,
+  manual_scale: 1,
   texture_auto_resize: true,
-  texture_resize_method: 'Bilinear'
+  texture_resize_method: 'Bilinear',
+  pbr_enabled: true
 });
 
 const face = ref<ProjectSettings['face']>({
-  blink: { enabled: true, interval_sec: 4.0, close_duration_sec: 0.15, wink_enabled: true },
+  blink: { enabled: true, interval_sec: 4, close_duration_sec: 0.15, wink_enabled: true },
   lip_sync: { enabled: false, mode: 'chat', open_angle: 0.5, speed: 0.5 },
   eye_tracking: {
     camera_follow: true,
@@ -94,6 +95,7 @@ const toProjectSettings = (): ProjectSettings => ({
   manual_scale: options.value.manual_scale,
   texture_auto_resize: options.value.texture_auto_resize,
   texture_resize_method: options.value.texture_resize_method,
+  pbr_enabled: options.value.pbr_enabled,
   face: face.value,
   fingers: fingers.value
 });
@@ -105,6 +107,7 @@ const applyProjectSettings = (settings: ProjectSettings) => {
   options.value.manual_scale = settings.manual_scale;
   options.value.texture_auto_resize = settings.texture_auto_resize;
   options.value.texture_resize_method = settings.texture_resize_method;
+  options.value.pbr_enabled = settings.pbr_enabled ?? true;
   face.value = settings.face;
   fingers.value = settings.fingers;
 };
@@ -112,7 +115,7 @@ const applyProjectSettings = (settings: ProjectSettings) => {
 const pickInputFile = async () => {
   const selected = await fs.selectFiles({
     multiple: false,
-    filters: [{ name: 'VRM', extensions: ['vrm', 'glb'] }]
+    filters: [{ name: 'VRM', extensions: ['vrm'] }]
   });
   if (typeof selected === 'string') {
     inputPath.value = selected;
@@ -327,6 +330,12 @@ onBeforeUnmount(() => {
                 <v-switch v-model="options.texture_auto_resize" :label="t('texture_auto_resize')" />
                 <div class="text-caption text-medium-emphasis mt-1">
                   {{ t('texture_resize_hint') }}
+                </div>
+              </v-col>
+              <v-col cols="12" md="4" class="d-flex flex-column align-start">
+                <v-switch v-model="options.pbr_enabled" :label="t('pbr_enabled')" />
+                <div class="text-caption text-medium-emphasis mt-1">
+                  {{ t('pbr_hint') }}
                 </div>
               </v-col>
             </v-row>
@@ -559,6 +568,8 @@ en:
   manual_scale: Manual Scale
   texture_auto_resize: Prefer 1024px Downscale
   texture_resize_hint: 'ON: >=1025px -> 1024px / OFF: only >=2049px -> 2048px'
+  pbr_enabled: Enable PBR Materials
+  pbr_hint: 'ON: Process metallic/roughness / OFF: Use only simple materials'
   blink_enabled: Blink ON
   blink_interval: Blink Interval (sec)
   lip_sync_enabled: Lip Sync ON
@@ -608,6 +619,8 @@ fr:
   manual_scale: Échelle manuelle
   texture_auto_resize: Priorité réduction 1024px
   texture_resize_hint: 'ON: >=1025px -> 1024px / OFF: uniquement >=2049px -> 2048px'
+  pbr_enabled: Activer les matériaux PBR
+  pbr_hint: 'ON: Traiter metallic/roughness / OFF: Utiliser uniquement des matériaux simples'
   blink_enabled: Clignement activé
   blink_interval: Intervalle de clignement (s)
   lip_sync_enabled: Sync labiale activée
@@ -657,6 +670,8 @@ ja:
   manual_scale: 手動スケール
   texture_auto_resize: 1024px優先縮小
   texture_resize_hint: 'ON: 1025px以上→1024px / OFF: 2049px以上のみ→2048px'
+  pbr_enabled: PBRマテリアル有効
+  pbr_hint: 'ON: metallic/roughness処理 / OFF: シンプルマテリアルのみ'
   blink_enabled: 瞬きON
   blink_interval: 瞬き間隔(秒)
   lip_sync_enabled: クチパクON
@@ -706,6 +721,8 @@ ko:
   manual_scale: 수동 스케일
   texture_auto_resize: 1024px 우선 축소
   texture_resize_hint: 'ON: 1025px 이상→1024px / OFF: 2049px 이상만→2048px'
+  pbr_enabled: PBR 재료 활성화
+  pbr_hint: 'ON: metallic/roughness 처리 / OFF: 단순 재료만'
   blink_enabled: 눈 깜빡임 ON
   blink_interval: 깜빡임 간격(초)
   lip_sync_enabled: 립싱크 ON
@@ -755,6 +772,8 @@ zhHant:
   manual_scale: 手動縮放
   texture_auto_resize: 優先縮小至 1024px
   texture_resize_hint: 'ON: >=1025px→1024px / OFF: 僅 >=2049px→2048px'
+  pbr_enabled: 啟用 PBR 材質
+  pbr_hint: 'ON: 處理 metallic/roughness / OFF: 僅使用簡單材質'
   blink_enabled: 眨眼 ON
   blink_interval: 眨眼間隔(秒)
   lip_sync_enabled: 口型同步 ON
@@ -804,6 +823,8 @@ zhHans:
   manual_scale: 手动缩放
   texture_auto_resize: 优先缩小至 1024px
   texture_resize_hint: 'ON: >=1025px→1024px / OFF: 仅 >=2049px→2048px'
+  pbr_enabled: 启用 PBR 材质
+  pbr_hint: 'ON: 处理 metallic/roughness / OFF: 仅使用简单材质'
   blink_enabled: 眨眼 ON
   blink_interval: 眨眼间隔(秒)
   lip_sync_enabled: 口型同步 ON

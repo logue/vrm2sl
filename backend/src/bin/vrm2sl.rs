@@ -22,7 +22,7 @@ fn run() -> Result<()> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: vrm2sl <input.vrm> <output.glb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
+            "Usage: vrm2sl <input.vrm> <output.glb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--pbr on|off] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
         );
         process::exit(2);
     }
@@ -76,6 +76,15 @@ fn run() -> Result<()> {
                 project_settings.texture_resize_method = parse_resize_method(value)?;
                 index += 2;
             }
+            "--pbr" => {
+                let value = args.get(index + 1).context("--pbr requires on|off")?;
+                project_settings.pbr_enabled = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => bail!("--pbr must be on or off"),
+                };
+                index += 2;
+            }
             "--report" => {
                 let value = args.get(index + 1).context("--report requires a path")?;
                 report_path = Some(PathBuf::from(value));
@@ -119,6 +128,7 @@ fn run() -> Result<()> {
         manual_scale: project_settings.manual_scale,
         texture_auto_resize: project_settings.texture_auto_resize,
         texture_resize_method: project_settings.texture_resize_method,
+        pbr_enabled: project_settings.pbr_enabled,
     };
 
     let analysis = analyze_vrm(&input, options)?;

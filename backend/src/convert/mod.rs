@@ -1,6 +1,7 @@
 mod diagnostic;
 mod geometry;
 mod gltf_utils;
+mod material;
 mod skeleton;
 mod skinning;
 mod types;
@@ -9,8 +10,9 @@ mod validation;
 use std::{borrow::Cow, collections::HashMap, fs, io::Cursor, path::Path};
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gltf::{binary::Glb, import};
-use image::ImageFormat;
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use serde_json::Value;
 
 use crate::texture::{ResizeInterpolation, resize_texture_to_max};
@@ -29,6 +31,7 @@ use diagnostic::{
 use geometry::{
     bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm, orient_avatar_for_sl,
 };
+use material::{normalize_materials_for_secondlife, validate_and_fix_texture_references};
 use skeleton::{
     correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
     normalize_sl_bone_rotations, promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy,
@@ -280,6 +283,7 @@ pub fn convert_vrm_to_gdb(
         &humanoid_bone_nodes,
         options.texture_auto_resize,
         options.texture_resize_method,
+        options.pbr_enabled,
     )?;
 
     let diagnostic_path = diagnostic_log_path_for_output(output_path);
@@ -336,6 +340,7 @@ fn transform_and_write_glb(
     humanoid_bone_nodes: &HashMap<String, usize>,
     texture_auto_resize: bool,
     texture_resize_method: ResizeInterpolation,
+    pbr_enabled: bool,
 ) -> Result<()> {
     let bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
@@ -387,6 +392,12 @@ fn transform_and_write_glb(
     regenerate_inverse_bind_matrices(&mut json, &mut bin)?;
     remove_vrm_extensions_and_extras(&mut json);
     remove_unsupported_features(&mut json);
+    embed_image_uris_into_buffer_views(&mut json, &mut bin, input_path)?;
+
+    // Normalize materials for SecondLife compatibility
+    normalize_materials_for_secondlife(&mut json, pbr_enabled)?;
+    // Validate and fix texture buffer references
+    validate_and_fix_texture_references(&mut json)?;
 
     apply_texture_resize_to_embedded_images(
         &mut json,
@@ -419,7 +430,192 @@ fn transform_and_write_glb(
     Ok(())
 }
 
+fn embed_image_uris_into_buffer_views(
+    json: &mut Value,
+    bin: &mut Vec<u8>,
+    input_path: &Path,
+) -> Result<()> {
+    let Some(images) = json.get("images").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let existing_buffer_view_count = json
+        .get("bufferViews")
+        .and_then(Value::as_array)
+        .map(|views| views.len())
+        .unwrap_or(0);
+
+    let mut image_payloads = Vec::<Option<(Vec<u8>, String)>>::with_capacity(images.len());
+    let existing_buffer_views = json
+        .get("bufferViews")
+        .and_then(Value::as_array)
+        .map(|views| views.len())
+        .unwrap_or(0);
+
+    for image in images {
+        let valid_buffer_view = image
+            .get("bufferView")
+            .and_then(Value::as_u64)
+            .map(|index| (index as usize) < existing_buffer_views)
+            .unwrap_or(false);
+
+        if valid_buffer_view {
+            image_payloads.push(None);
+            continue;
+        }
+
+        let declared_mime = image
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        let payload = image
+            .get("uri")
+            .and_then(Value::as_str)
+            .map(|uri| decode_image_uri(uri, input_path, declared_mime.as_deref()))
+            .transpose()?
+            .unwrap_or_else(create_placeholder_texture);
+
+        image_payloads.push(Some(payload));
+    }
+
+    if !image_payloads.iter().any(Option::is_some) {
+        return Ok(());
+    }
+
+    if json.get("bufferViews").and_then(Value::as_array).is_none() {
+        json["bufferViews"] = Value::Array(Vec::new());
+    }
+    if json.get("buffers").and_then(Value::as_array).is_none() {
+        json["buffers"] = Value::Array(vec![serde_json::json!({ "byteLength": 0 })]);
+    } else if json["buffers"]
+        .as_array()
+        .is_some_and(|buffers| buffers.is_empty())
+    {
+        json["buffers"] = Value::Array(vec![serde_json::json!({ "byteLength": 0 })]);
+    }
+
+    let mut assigned_buffer_views = vec![None; image_payloads.len()];
+    if let Some(buffer_views) = json.get_mut("bufferViews").and_then(Value::as_array_mut) {
+        for (image_index, payload) in image_payloads.iter().enumerate() {
+            let Some((bytes, _mime_type)) = payload else {
+                continue;
+            };
+
+            while bin.len() % 4 != 0 {
+                bin.push(0);
+            }
+
+            let byte_offset = bin.len();
+            bin.extend_from_slice(bytes);
+
+            let buffer_view_index =
+                existing_buffer_view_count + buffer_views.len() - existing_buffer_view_count;
+            buffer_views.push(serde_json::json!({
+                "buffer": 0,
+                "byteOffset": byte_offset,
+                "byteLength": bytes.len(),
+            }));
+            assigned_buffer_views[image_index] = Some(buffer_view_index);
+        }
+    }
+
+    if let Some(images_mut) = json.get_mut("images").and_then(Value::as_array_mut) {
+        for (image_index, image) in images_mut.iter_mut().enumerate() {
+            let Some(buffer_view_index) = assigned_buffer_views.get(image_index).and_then(|v| *v)
+            else {
+                continue;
+            };
+            let Some((_, mime_type)) = image_payloads.get(image_index).and_then(|v| v.as_ref())
+            else {
+                continue;
+            };
+
+            image["bufferView"] = Value::from(buffer_view_index as u64);
+            image["mimeType"] = Value::String(mime_type.clone());
+            if let Some(obj) = image.as_object_mut() {
+                obj.remove("uri");
+                obj.remove("_invalid");
+            }
+        }
+    }
+
+    if let Some(buffers) = json.get_mut("buffers").and_then(Value::as_array_mut)
+        && let Some(first_buffer) = buffers.first_mut()
+    {
+        first_buffer["byteLength"] = Value::from(bin.len() as u64);
+    }
+
+    Ok(())
+}
+
+fn decode_image_uri(
+    uri: &str,
+    input_path: &Path,
+    declared_mime: Option<&str>,
+) -> Result<(Vec<u8>, String)> {
+    if let Some(data_uri) = uri.strip_prefix("data:") {
+        let (header, payload) = data_uri
+            .split_once(',')
+            .context("data URI is missing a payload separator")?;
+        let mime_type = header
+            .split(';')
+            .next()
+            .filter(|value| !value.is_empty())
+            .or(declared_mime)
+            .unwrap_or("image/png")
+            .to_string();
+
+        let bytes = if header
+            .split(';')
+            .any(|part| part.eq_ignore_ascii_case("base64"))
+        {
+            STANDARD
+                .decode(payload.as_bytes())
+                .context("failed to decode base64 image data")?
+        } else {
+            payload.as_bytes().to_vec()
+        };
+
+        return Ok((bytes, mime_type));
+    }
+
+    let base_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let image_path = base_dir.join(uri);
+    let bytes = fs::read(&image_path)
+        .with_context(|| format!("failed to read image URI: {}", image_path.display()))?;
+    let mime_type = declared_mime
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| infer_mime_type(&bytes).to_string());
+    Ok((bytes, mime_type))
+}
+
+fn infer_mime_type(bytes: &[u8]) -> &'static str {
+    match image::guess_format(bytes) {
+        Ok(ImageFormat::Jpeg) => "image/jpeg",
+        Ok(ImageFormat::Png) => "image/png",
+        Ok(ImageFormat::Gif) => "image/gif",
+        Ok(ImageFormat::WebP) => "image/webp",
+        _ => "image/png",
+    }
+}
+
+fn create_placeholder_texture() -> (Vec<u8>, String) {
+    let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(1, 1, Rgba([255, 255, 255, 255])));
+    let mut encoded = Vec::new();
+    let _ = image.write_to(&mut Cursor::new(&mut encoded), ImageFormat::Png);
+    (encoded, "image/png".to_string())
+}
+
 /// Resize embedded image buffer views when textures exceed 1024x1024.
+///
+/// This function:
+/// 1. Validates buffer view integrity before resize
+/// 2. Decodes each texture image
+/// 3. Resizes according to policy
+/// 4. Re-encodes with consistent format
+/// 5. Updates all buffer offsets and lengths
+/// 6. Ensures 4-byte alignment for glTF compliance
 fn apply_texture_resize_to_embedded_images(
     json: &mut Value,
     bin: &mut Vec<u8>,
@@ -430,20 +626,33 @@ fn apply_texture_resize_to_embedded_images(
         return Ok(());
     };
 
+    // ─── Step 1: Extract all buffer segments and validate offsets ────────────
     let mut segments = Vec::<Vec<u8>>::with_capacity(buffer_views.len());
-    for view in buffer_views {
+    for (view_index, view) in buffer_views.iter().enumerate() {
         let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
         let length = view.get("byteLength").and_then(Value::as_u64).unwrap_or(0) as usize;
         let end = offset.saturating_add(length);
-        if end <= bin.len() {
-            segments.push(bin[offset..end].to_vec());
-        } else {
+
+        // Validate buffer bounds
+        if end > bin.len() {
+            eprintln!(
+                "[WARN] Buffer view {} has invalid bounds: offset={}, length={}, bin_size={}",
+                view_index,
+                offset,
+                length,
+                bin.len()
+            );
             segments.push(Vec::new());
+        } else if length == 0 {
+            segments.push(Vec::new());
+        } else {
+            segments.push(bin[offset..end].to_vec());
         }
     }
 
+    // ─── Step 2: Process and resize images ─────────────────────────────────────
     if let Some(images) = json.get_mut("images").and_then(Value::as_array_mut) {
-        for image in images {
+        for (image_index, image) in images.iter_mut().enumerate() {
             let Some(view_index) = image
                 .get("bufferView")
                 .and_then(Value::as_u64)
@@ -452,27 +661,59 @@ fn apply_texture_resize_to_embedded_images(
                 continue;
             };
 
-            let Some(image_bytes) = segments.get_mut(view_index) else {
+            if view_index >= segments.len() {
+                eprintln!(
+                    "[WARN] Image {} references invalid buffer view {}",
+                    image_index, view_index
+                );
                 continue;
+            }
+
+            let image_bytes = match segments.get_mut(view_index) {
+                Some(bytes) if !bytes.is_empty() => bytes,
+                _ => {
+                    eprintln!(
+                        "[WARN] Image {} buffer view {} is empty or invalid",
+                        image_index, view_index
+                    );
+                    continue;
+                }
             };
 
+            // Determine image format from MIME type
             let mime_type = image
                 .get("mimeType")
                 .and_then(Value::as_str)
                 .unwrap_or("image/png");
+
             let image_format = match mime_type {
-                "image/png" => Some(ImageFormat::Png),
-                "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
-                _ => None,
+                "image/png" => ImageFormat::Png,
+                "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
+                _ => {
+                    eprintln!(
+                        "[WARN] Image {} has unsupported MIME type: {}",
+                        image_index, mime_type
+                    );
+                    continue;
+                }
             };
 
-            let Some(image_format) = image_format else {
-                continue;
+            // Decode image
+            let decoded = match image::load_from_memory(image_bytes) {
+                Ok(img) => img,
+                Err(e) => {
+                    eprintln!(
+                        "[WARN] Failed to decode image {} (view {}, size {} bytes): {}",
+                        image_index,
+                        view_index,
+                        image_bytes.len(),
+                        e
+                    );
+                    continue;
+                }
             };
 
-            let decoded = image::load_from_memory(image_bytes)
-                .with_context(|| format!("failed to decode embedded texture view {view_index}"))?;
-
+            // Determine target size based on resize policy
             let max_dim = decoded.width().max(decoded.height());
             let target_max = if max_dim <= 1024 {
                 1024
@@ -484,34 +725,43 @@ fn apply_texture_resize_to_embedded_images(
                 2048
             };
 
+            // Resize if necessary
             let resized = if max_dim > target_max {
                 resize_texture_to_max(&decoded, target_max, target_max, interpolation)
             } else {
                 decoded
             };
-            let mut encoded = Vec::<u8>::new();
-            resized
-                .write_to(&mut Cursor::new(&mut encoded), image_format)
-                .with_context(|| {
-                    format!(
-                        "failed to encode resized embedded texture view {} as {}",
-                        view_index, mime_type
-                    )
-                })?;
 
+            // Re-encode image
+            let mut encoded = Vec::<u8>::new();
+            if let Err(e) = resized.write_to(&mut Cursor::new(&mut encoded), image_format) {
+                eprintln!(
+                    "[WARN] Failed to encode resized image {} as {}: {}",
+                    image_index, mime_type, e
+                );
+                continue;
+            }
+
+            // Update MIME type if changed
+            let final_mime = match image_format {
+                ImageFormat::Png => "image/png",
+                ImageFormat::Jpeg => "image/jpeg",
+                _ => mime_type,
+            };
+            image["mimeType"] = Value::String(final_mime.to_string());
+
+            // Update segment
             *image_bytes = encoded;
-            image["mimeType"] = Value::String(match image_format {
-                ImageFormat::Png => "image/png".to_string(),
-                ImageFormat::Jpeg => "image/jpeg".to_string(),
-                _ => mime_type.to_string(),
-            });
         }
     }
 
+    // ─── Step 3: Rebuild binary with proper alignment ────────────────────────
     let mut rebuilt = Vec::<u8>::new();
     let mut offsets = Vec::<usize>::with_capacity(segments.len());
     let mut lengths = Vec::<usize>::with_capacity(segments.len());
+
     for mut chunk in segments {
+        // Align to 4-byte boundary for glTF compliance
         while rebuilt.len() % 4 != 0 {
             rebuilt.push(0);
         }
@@ -520,6 +770,7 @@ fn apply_texture_resize_to_embedded_images(
         rebuilt.append(&mut chunk);
     }
 
+    // ─── Step 4: Update buffer view metadata ───────────────────────────────────
     if let Some(buffer_views_mut) = json.get_mut("bufferViews").and_then(Value::as_array_mut) {
         for (index, view) in buffer_views_mut.iter_mut().enumerate() {
             if let Some(offset) = offsets.get(index).copied() {
@@ -530,6 +781,7 @@ fn apply_texture_resize_to_embedded_images(
         }
     }
 
+    // ─── Step 5: Update buffer metadata ───────────────────────────────────────
     if let Some(buffers) = json.get_mut("buffers").and_then(Value::as_array_mut) {
         if let Some(first_buffer) = buffers.first_mut() {
             first_buffer["byteLength"] = Value::from(rebuilt.len() as u64);

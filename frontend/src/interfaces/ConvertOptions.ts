@@ -10,4 +10,6 @@ export interface ConvertOptions {
   texture_auto_resize: boolean;
   /** Interpolation method used for texture downscaling. */
   texture_resize_method: TextureResizeMethod;
+  /** Enable PBR (Physically Based Rendering) material support. */
+  pbr_enabled: boolean;
 }

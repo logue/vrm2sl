@@ -16,6 +16,8 @@ export interface ProjectSettings {
   texture_auto_resize: boolean;
   /** Interpolation method used for texture downscaling. */
   texture_resize_method: ConvertOptions['texture_resize_method'];
+  /** Enable PBR (Physically Based Rendering) material support. */
+  pbr_enabled: boolean;
   /** Face-related settings. */
   face: FaceSettings;
   /** Finger-related settings. */

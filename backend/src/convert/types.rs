@@ -168,6 +168,8 @@ pub struct ConvertOptions {
     pub texture_auto_resize: bool,
     /// Interpolation method used for texture resize operations.
     pub texture_resize_method: ResizeInterpolation,
+    /// Enable PBR (Physically Based Rendering) material support.
+    pub pbr_enabled: bool,
 }
 
 impl Default for ConvertOptions {
@@ -177,6 +179,7 @@ impl Default for ConvertOptions {
             manual_scale: 1.0,
             texture_auto_resize: true,
             texture_resize_method: ResizeInterpolation::Bilinear,
+            pbr_enabled: true,
         }
     }
 }
