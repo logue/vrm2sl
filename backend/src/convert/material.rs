@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use serde_json::Value;
+use std::io::Cursor;
 
 /// Normalize all materials for SecondLife compatibility.
 pub(super) fn normalize_materials_for_secondlife(
@@ -234,6 +236,278 @@ pub(super) fn validate_and_fix_texture_references(json: &mut Value) -> Result<()
     }
 
     Ok(())
+}
+
+/// Merge AO + metallic-roughness into a single ORM map and align texture refs.
+///
+/// If `occlusionTexture` and `pbrMetallicRoughness.metallicRoughnessTexture`
+/// point to different textures, this function rewrites the metallic-roughness
+/// image so that:
+/// - R channel comes from AO texture (if available)
+/// - G/B channels come from metallic-roughness texture
+/// Then both material slots will reference the same texture index.
+pub(super) fn merge_orm_textures_into_single_map(json: &mut Value, bin: &mut [u8]) -> Result<()> {
+    let material_count = json
+        .get("materials")
+        .and_then(Value::as_array)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    for material_index in 0..material_count {
+        let (Some(ao_tex), Some(mr_tex)) = (
+            texture_index_at(json, material_index, "occlusionTexture"),
+            texture_index_at(
+                json,
+                material_index,
+                "pbrMetallicRoughness.metallicRoughnessTexture",
+            ),
+        ) else {
+            continue;
+        };
+
+        if ao_tex == mr_tex {
+            continue;
+        }
+
+        let ao_bytes = get_image_bytes_by_texture_index(json, bin, ao_tex)?;
+        let mr_bytes = get_image_bytes_by_texture_index(json, bin, mr_tex)?;
+
+        let merged = match (ao_bytes, mr_bytes) {
+            (Some(ao), Some(mr)) => {
+                let merged_img = compose_orm_image(&ao, &mr).with_context(|| {
+                    format!("failed to compose ORM for material {}", material_index)
+                })?;
+                Some(encode_png(&merged_img).context("failed to encode merged ORM image")?)
+            }
+            _ => None,
+        };
+
+        if let Some(bytes) = merged {
+            replace_image_bytes_by_texture_index(json, bin, mr_tex, &bytes)?;
+            set_image_mime_by_texture_index(json, mr_tex, "image/png");
+        }
+
+        set_texture_index_at(json, material_index, "occlusionTexture", mr_tex);
+    }
+
+    Ok(())
+}
+
+fn texture_index_at(json: &Value, material_index: usize, path: &str) -> Option<usize> {
+    let mat = json
+        .get("materials")
+        .and_then(Value::as_array)
+        .and_then(|m| m.get(material_index))?;
+
+    let tex_info = match path {
+        "occlusionTexture" => mat.get("occlusionTexture"),
+        "pbrMetallicRoughness.metallicRoughnessTexture" => mat
+            .get("pbrMetallicRoughness")
+            .and_then(|p| p.get("metallicRoughnessTexture")),
+        _ => None,
+    }?;
+
+    tex_info
+        .get("index")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+}
+
+fn set_texture_index_at(json: &mut Value, material_index: usize, path: &str, new_index: usize) {
+    let Some(material) = json
+        .get_mut("materials")
+        .and_then(Value::as_array_mut)
+        .and_then(|m| m.get_mut(material_index))
+    else {
+        return;
+    };
+
+    let target = match path {
+        "occlusionTexture" => material.get_mut("occlusionTexture"),
+        "pbrMetallicRoughness.metallicRoughnessTexture" => material
+            .get_mut("pbrMetallicRoughness")
+            .and_then(|p| p.get_mut("metallicRoughnessTexture")),
+        _ => None,
+    };
+
+    if let Some(tex_info) = target {
+        tex_info["index"] = Value::from(new_index as u64);
+    }
+}
+
+fn get_image_bytes_by_texture_index(
+    json: &Value,
+    bin: &[u8],
+    texture_index: usize,
+) -> Result<Option<Vec<u8>>> {
+    let texture = json
+        .get("textures")
+        .and_then(Value::as_array)
+        .and_then(|t| t.get(texture_index));
+    let Some(texture) = texture else {
+        return Ok(None);
+    };
+
+    let Some(image_index) = texture
+        .get("source")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+    else {
+        return Ok(None);
+    };
+
+    let image = json
+        .get("images")
+        .and_then(Value::as_array)
+        .and_then(|i| i.get(image_index));
+    let Some(image) = image else {
+        return Ok(None);
+    };
+
+    let Some(buffer_view_index) = image
+        .get("bufferView")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+    else {
+        return Ok(None);
+    };
+
+    let buffer_view = json
+        .get("bufferViews")
+        .and_then(Value::as_array)
+        .and_then(|v| v.get(buffer_view_index))
+        .context("bufferView not found for image")?;
+
+    let offset = buffer_view
+        .get("byteOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let length = buffer_view
+        .get("byteLength")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let end = offset.saturating_add(length);
+
+    if end > bin.len() || length == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(bin[offset..end].to_vec()))
+}
+
+fn replace_image_bytes_by_texture_index(
+    json: &mut Value,
+    bin: &mut [u8],
+    texture_index: usize,
+    new_bytes: &[u8],
+) -> Result<()> {
+    let Some(image_index) = json
+        .get("textures")
+        .and_then(Value::as_array)
+        .and_then(|t| t.get(texture_index))
+        .and_then(|t| t.get("source"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+    else {
+        return Ok(());
+    };
+
+    let Some(buffer_view_index) = json
+        .get("images")
+        .and_then(Value::as_array)
+        .and_then(|i| i.get(image_index))
+        .and_then(|img| img.get("bufferView"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+    else {
+        return Ok(());
+    };
+
+    let Some(buffer_view) = json
+        .get_mut("bufferViews")
+        .and_then(Value::as_array_mut)
+        .and_then(|v| v.get_mut(buffer_view_index))
+    else {
+        return Ok(());
+    };
+
+    let offset = buffer_view
+        .get("byteOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let length = buffer_view
+        .get("byteLength")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let end = offset.saturating_add(length);
+
+    if end > bin.len() || new_bytes.len() > length {
+        return Ok(());
+    }
+
+    bin[offset..offset + new_bytes.len()].copy_from_slice(new_bytes);
+    if new_bytes.len() < length {
+        for b in &mut bin[offset + new_bytes.len()..end] {
+            *b = 0;
+        }
+    }
+
+    Ok(())
+}
+
+fn set_image_mime_by_texture_index(json: &mut Value, texture_index: usize, mime: &str) {
+    let Some(image_index) = json
+        .get("textures")
+        .and_then(Value::as_array)
+        .and_then(|t| t.get(texture_index))
+        .and_then(|t| t.get("source"))
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+    else {
+        return;
+    };
+
+    if let Some(image) = json
+        .get_mut("images")
+        .and_then(Value::as_array_mut)
+        .and_then(|i| i.get_mut(image_index))
+    {
+        image["mimeType"] = Value::String(mime.to_string());
+    }
+}
+
+fn compose_orm_image(ao_bytes: &[u8], mr_bytes: &[u8]) -> Result<DynamicImage> {
+    let ao = image::load_from_memory(ao_bytes).context("failed to decode AO image")?;
+    let mr = image::load_from_memory(mr_bytes).context("failed to decode MR image")?;
+
+    let (w, h) = (mr.width(), mr.height());
+    let ao_resized = if ao.width() != w || ao.height() != h {
+        ao.resize_exact(w, h, image::imageops::FilterType::Triangle)
+    } else {
+        ao
+    };
+
+    let ao_rgba = ao_resized.to_rgba8();
+    let mr_rgba = mr.to_rgba8();
+    let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
+
+    for y in 0..h {
+        for x in 0..w {
+            let ao_px = ao_rgba.get_pixel(x, y);
+            let mr_px = mr_rgba.get_pixel(x, y);
+            out.put_pixel(x, y, Rgba([ao_px[0], mr_px[1], mr_px[2], 255]));
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
+fn encode_png(image: &DynamicImage) -> Result<Vec<u8>> {
+    let mut out = Vec::<u8>::new();
+    image
+        .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+        .context("failed to encode png")?;
+    Ok(out)
 }
 
 /// Validate material texture references against available textures.

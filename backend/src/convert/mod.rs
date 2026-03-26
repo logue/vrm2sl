@@ -31,7 +31,10 @@ use diagnostic::{
 use geometry::{
     bake_scale_into_geometry, collect_mesh_statistics, estimate_height_cm, orient_avatar_for_sl,
 };
-use material::{normalize_materials_for_secondlife, validate_and_fix_texture_references};
+use material::{
+    merge_orm_textures_into_single_map, normalize_materials_for_secondlife,
+    validate_and_fix_texture_references,
+};
 use skeleton::{
     correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
     normalize_sl_bone_rotations, promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy,
@@ -396,6 +399,8 @@ fn transform_and_write_glb(
 
     // Normalize materials for SecondLife compatibility
     normalize_materials_for_secondlife(&mut json, pbr_enabled)?;
+    // Consolidate AO/MR into one ORM texture map when both are present.
+    merge_orm_textures_into_single_map(&mut json, &mut bin)?;
     // Validate and fix texture buffer references
     validate_and_fix_texture_references(&mut json)?;
 

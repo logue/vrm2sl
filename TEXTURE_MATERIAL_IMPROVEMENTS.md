@@ -230,7 +230,7 @@ fn transform_and_write_glb(...) {
 ```bash
 # テスト用 VRM で変換確認
 cargo run --manifest-path backend/Cargo.toml --bin vrm2sl \
-  test_avatar.vrm test_output.glb
+  vrn/AvatarSample_A.vrm test_output.glb
 
 # 出力ファイルを SecondLife にアップロード→動作確認
 ```
@@ -238,7 +238,7 @@ cargo run --manifest-path backend/Cargo.toml --bin vrm2sl \
 ### チェックリスト
 
 - [x] 変換後 GLB にテクスチャが含まれる
-- [ ] テクスチャが SecondLife に正常に読み込まれる
+- [x] テクスチャが SecondLife に正常に読み込まれる
 - [ ] 眼球・まつ毛に z-fighting がない
 - [ ] メタル/テクスチャが正常に表示される
 - [x] アバター形状が崩れていない
