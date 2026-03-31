@@ -126,6 +126,14 @@ Modified for use in this tool.
 
 Frontend-side asset note: see [frontend/README.md](frontend/README.md).
 
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Japanese home](docs/content/ja/index.md)
+- [English home](docs/content/en/index.md)
+- [Japanese architecture](docs/content/ja/architecture.md)
+- [English architecture](docs/content/en/architecture.md)
+
 See [Contributing](CONTRIBUTING.md) for development and coding conventions.
 
 ## Testing

@@ -24,6 +24,7 @@ const fs = useFileSystem();
 const inputPath = ref('');
 const outputPath = ref('');
 const settingsPath = ref('project-settings.json');
+const heightScaleEnabled = ref(true);
 
 const options = ref<ConvertOptions>({
   target_height_cm: 200,
@@ -308,12 +309,16 @@ onBeforeUnmount(() => {
             </v-row>
 
             <v-row>
+              <v-col cols="12" md="4" class="d-flex flex-column align-start">
+                <v-switch v-model="heightScaleEnabled" :label="t('height_scale_enabled')" />
+              </v-col>
               <v-col cols="12" md="4">
                 <v-text-field
                   v-model.number="options.target_height_cm"
                   type="number"
                   :label="t('target_height')"
                   variant="outlined"
+                  :disabled="!heightScaleEnabled"
                 />
               </v-col>
               <v-col cols="12" md="4">
@@ -324,6 +329,7 @@ onBeforeUnmount(() => {
                   step="0.01"
                   thumb-label
                   :label="t('manual_scale')"
+                  :disabled="!heightScaleEnabled"
                 />
               </v-col>
               <v-col cols="12" md="4" class="d-flex flex-column align-start">
@@ -564,6 +570,7 @@ en:
   output_glb: Output .glb
   btn_select_output: Select Output
   btn_export: Export
+  height_scale_enabled: Enable Height/Scale Override
   target_height: SL Target Height (cm)
   manual_scale: Manual Scale
   texture_auto_resize: Prefer 1024px Downscale
@@ -615,6 +622,7 @@ fr:
   output_glb: Sortie .glb
   btn_select_output: Sélectionner la sortie
   btn_export: Exporter
+  height_scale_enabled: 'Activer la modification hauteur/échelle'
   target_height: Taille cible SL (cm)
   manual_scale: Échelle manuelle
   texture_auto_resize: Priorité réduction 1024px
@@ -666,6 +674,7 @@ ja:
   output_glb: 出力 .glb
   btn_select_output: 保存先選択
   btn_export: エクスポート
+  height_scale_enabled: 身長・スケール変更を有効にする
   target_height: SL目標身長(cm)
   manual_scale: 手動スケール
   texture_auto_resize: 1024px優先縮小
@@ -717,6 +726,7 @@ ko:
   output_glb: 출력 .glb
   btn_select_output: 저장 위치 선택
   btn_export: 내보내기
+  height_scale_enabled: 키/스케일 변경 활성화
   target_height: SL 목표 신장(cm)
   manual_scale: 수동 스케일
   texture_auto_resize: 1024px 우선 축소
@@ -768,6 +778,7 @@ zhHant:
   output_glb: 輸出 .glb
   btn_select_output: 選擇輸出位置
   btn_export: 匯出
+  height_scale_enabled: 啟用身高/縮放調整
   target_height: SL 目標身高(cm)
   manual_scale: 手動縮放
   texture_auto_resize: 優先縮小至 1024px
@@ -819,6 +830,7 @@ zhHans:
   output_glb: 输出 .glb
   btn_select_output: 选择输出位置
   btn_export: 导出
+  height_scale_enabled: 启用身高/缩放调整
   target_height: SL 目标身高(cm)
   manual_scale: 手动缩放
   texture_auto_resize: 优先缩小至 1024px

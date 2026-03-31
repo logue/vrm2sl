@@ -1,0 +1,192 @@
+import configPrettier from '@vue/eslint-config-prettier';
+import withNuxt from './.nuxt/eslint.config.mjs';
+import markdown from '@eslint/markdown';
+
+// import pluginVueI18n from '@intlify/eslint-plugin-vue-i18n';
+import { globalIgnores } from 'eslint/config';
+import pluginImport from 'eslint-plugin-import-x';
+import pluginOxlint from 'eslint-plugin-oxlint';
+// @ts-ignore
+import pluginSecurity from 'eslint-plugin-security';
+import pluginVueA11y from 'eslint-plugin-vuejs-accessibility';
+import pluginVuetify from 'eslint-plugin-vuetify';
+import pluginYml from 'eslint-plugin-yml';
+
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+/**
+ * ESLint Config for Docs (Nuxt)
+ */
+export default withNuxt(
+  {
+    name: 'docs/files-to-lint',
+    files: ['**/*.{ts,mts,tsx,vue}']
+  },
+  globalIgnores([
+    '.nuxt/',
+    '.output/',
+    'node_modules/',
+    '**/.cache/',
+    '**/*.d.ts',
+    'coverage/',
+    // 設定ファイルを除外
+    '*.config.ts',
+    '*.config.js',
+    'tsconfig.json',
+    'nuxt.config.ts',
+    // 生成されたJavaScriptファイルを除外
+    'src/**/*.js',
+    'src/**/*.vue.js',
+    // JSONファイルを除外
+    'src/**/*.json'
+  ]),
+  {
+    files: ['/**/*.ts', '/**/*.tsx'],
+    languageOptions: {
+      parserOptions: {
+        project: './tsconfig.json',
+        tsconfigRootDir: dirname(fileURLToPath(import.meta.url))
+      }
+    }
+  },
+  ...pluginVueA11y.configs['flat/recommended'],
+  ...pluginYml.configs['flat/recommended'],
+  // ...pluginVueI18n.configs['flat/recommended'],
+  pluginImport.flatConfigs.recommended,
+  pluginImport.flatConfigs.typescript,
+  pluginSecurity.configs.recommended,
+  ...markdown.configs.recommended,
+  {
+    name: 'Vuetify',
+    files: ['*.vue', '**/*.vue'],
+    plugins: {
+      vuetify: pluginVuetify
+    },
+    rules: {
+      ...pluginVuetify.configs.base.rules
+    }
+  },
+  {
+    files: ['**/*.md'],
+    rules: {
+      'no-irregular-whitespace': 'off',
+      // Markdown内のコードブロックの言語指定がない場合は警告
+      'markdown/fenced-code-language': 'warn'
+    }
+  },
+  {
+    settings: {
+      // This will do the trick
+      'import-x/parsers': {
+        espree: ['.js', '.cjs', '.mjs', '.jsx'],
+        '@typescript-eslint/parser': ['.ts', '.tsx'],
+        'vue-eslint-parser': ['.vue']
+      },
+      'import-x/resolver': {
+        // You will also need to install and configure the TypeScript resolver
+        // See also https://github.com/import-js/eslint-import-resolver-typescript#configuration
+        typescript: true,
+        node: true,
+        'eslint-import-resolver-custom-alias': {
+          alias: {
+            '@': './src',
+            '~': './src'
+          },
+          extensions: ['.js', '.ts', '.jsx', '.tsx', '.vue']
+        }
+      }
+    },
+    rules: {
+      'no-unused-vars': 'off',
+      // const lines: string[] = []; style
+      '@typescript-eslint/array-type': [
+        'error',
+        {
+          default: 'array'
+        }
+      ],
+      // Enable @ts-ignore etc.
+      '@typescript-eslint/ban-ts-comment': 'off',
+      // Left-hand side style
+      '@typescript-eslint/consistent-generic-constructors': ['error', 'type-annotation'],
+      // Enable import sort order, see bellow.
+      '@typescript-eslint/consistent-type-imports': [
+        'off',
+        {
+          prefer: 'type-imports'
+        }
+      ],
+      // Fix for pinia
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      // Exclude variables with leading underscores
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          args: 'all',
+          argsIgnorePattern: '^_',
+          caughtErrors: 'all',
+          caughtErrorsIgnorePattern: '^_',
+          destructuredArrayIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          ignoreRestSiblings: true
+        }
+      ],
+      // Fix for vite import.meta.env
+      '@typescript-eslint/strict-boolean-expressions': 'off',
+      // Fix for vite env.d.ts.
+      '@typescript-eslint/triple-slash-reference': 'off',
+      // Fix for Vue setup style
+      'import/default': 'off',
+      // Fix for vite
+      'import/namespace': 'off',
+      'import/no-default-export': 'off',
+      'import/no-named-as-default-member': 'off',
+      'import/no-named-as-default': 'off',
+      // Sort Import Order.
+      // see https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/order.md#importorder-enforce-a-convention-in-module-import-order
+      'import/order': [
+        'error',
+        {
+          groups: ['builtin', 'external', 'parent', 'sibling', 'index', 'object', 'type'],
+          pathGroups: [
+            // Vue/Nuxt Core
+            {
+              pattern: '{vue,vue-router,vuex,@/store,vue-i18n,pinia,nuxt,nuxt/**,@nuxt/**,@vue/**}',
+              group: 'external',
+              position: 'before'
+            },
+            // Internal Codes
+            {
+              pattern: '{@/**,~/**}',
+              group: 'internal',
+              position: 'before'
+            }
+          ],
+          pathGroupsExcludedImportTypes: ['builtin'],
+          alphabetize: {
+            order: 'asc'
+          },
+          'newlines-between': 'always'
+        }
+      ],
+      // A tag with no content should be written like <br />.
+      'vue/html-self-closing': [
+        'error',
+        {
+          html: {
+            void: 'always'
+          }
+        }
+      ],
+      '@typescript-eslint/no-explicit-any': 'warn',
+      // Nuxtのページコンポーネントは単一ファイルコンポーネントではないため、multi-word-component-namesを無効化
+      'vue/multi-word-component-names': 'off',
+      'vue/no-multiple-template-root': 'off',
+      // i18n用
+      'vue/valid-v-slot': 'off'
+    }
+  },
+  ...pluginOxlint.buildFromOxlintConfigFile('../.oxlintrc.json'),
+  configPrettier
+);

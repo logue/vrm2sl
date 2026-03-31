@@ -1,6 +1,6 @@
 {
   "name": "@tauri-vuetify-starter/frontend",
-  "version": "0.8.0-alpha.0",
+  "version": "0.8.1-alpha.1",
   "description": "Convert VRM avatars to Second Life format with ease",
   "license": "MIT",
   "type": "module",
@@ -90,7 +90,7 @@
     "stylelint-order": "^8.1.1",
     "stylelint-scss": "^7.0.0",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.57.2",
+    "typescript-eslint": "^8.58.0",
     "vite": "^8.0.3",
     "vite-plugin-checker": "0.12.0",
     "vite-plugin-vue-devtools": "^8.1.1",
