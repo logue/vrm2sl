@@ -1,15 +1,25 @@
 <script setup lang="ts">
-const { locale, rt, t } = useI18n();
+import logo from '@/assets/logo.png';
+const { locale, rt, t, tm } = useI18n();
 
 // Composables
 const { version, downloads, primaryDownload, detectPlatform } = useDownloads();
-const { features, leadDescriptions } = useContentData();
+const { leadDescriptions } = useContentData();
 const { languages, setupSeoMeta } = useSeoMetadata();
 
 // import.meta.env はテンプレートで直接使えないので変数に取り出す
-const appName = import.meta.env.VITE_APP_NAME as string | undefined;
+const appName = import.meta.env.VITE_APP_NAME || 'VRM2SL';
 
-// OS検出
+const notices = computed(() => {
+  try {
+    const content = tm('notice.content') as unknown;
+    return Array.isArray(content) ? (content as string[]) : [];
+  } catch {
+    return [];
+  }
+});
+
+// OS検出ß
 onMounted(() => {
   detectPlatform();
 });
@@ -20,6 +30,7 @@ setupSeoMeta();
 
 <template>
   <v-card class="mb-6 bg-transparent mx-auto" flat tag="section" max-width="960">
+    <v-img :src="logo" alt="App Logo" contain class="mx-auto my-4" height="256px" />
     <v-card-title class="text-h4 text-center pa-3" tag="h2">
       {{ appName }}
     </v-card-title>
@@ -196,22 +207,15 @@ setupSeoMeta();
   </v-card>
 
   <v-card class="mb-6 bg-transparent" flat tag="section">
-    <v-card-title class="text-h5 text-center" tag="h2">{{ t('features.title') }}</v-card-title>
-    <v-card-subtitle class="text-center">{{ t('features.subtitle') }}</v-card-subtitle>
+    <v-card-title class="text-h5 text-center" tag="h2">
+      {{ t('notice.title') }}
+    </v-card-title>
     <v-card-text>
-      <v-row class="mb-5">
-        <v-col v-for="item in features" :key="item.key" cols="12" md="4">
-          <v-card class="h-100">
-            <v-icon :icon="item.icon" size="64" color="primary" class="ma-4 mx-auto w-100" />
-            <v-card-title class="text-h6 text-center mt-2" tag="h3">
-              {{ t(`features.${item.key}.title`) }}
-            </v-card-title>
-            <v-card-text class="text-center">
-              {{ t(`features.${item.key}.description`) }}
-            </v-card-text>
-          </v-card>
-        </v-col>
-      </v-row>
+      <ul>
+        <li v-for="(item, index) in notices" :key="index">
+          {{ rt(item) }}
+        </li>
+      </ul>
     </v-card-text>
   </v-card>
 </template>
@@ -219,11 +223,11 @@ setupSeoMeta();
 <i18n lang="yaml">
 en:
   lead:
-    subtitle: Modern Cross-Platform Desktop Application
+    subtitle: Vrm2sl is vrm avatar to second life avatar converter.
     description:
-      - This is a modern desktop application built with Tauri v2 and Vue 3, combining the power of Rust with the flexibility of web technologies.
-      - Built for performance, security, and a great user experience across Windows, macOS, and Linux.
-      - This template provides a solid foundation for building your own cross-platform desktop applications with modern tools and best practices.
+      - This software exports VRM avatars created with VRoid or similar software into glTF (.gdb) format, which is compatible with Second Life.
+      - It is designed to be user-friendly and efficient, allowing users to easily convert their VRM avatars for use in Second Life.
+      - The application is built using Tauri v2 and Vue 3, combining the power of Rust with the flexibility of web technologies to provide a seamless experience for users on Windows, macOS, and Linux.
     start_button: Get Started
   download:
     download: Download
@@ -238,35 +242,20 @@ en:
     recommended: Recommended
     select_platform: Select your platform
     linux_appimage_desc: Portable, distribution-independent
-  features:
-    title: Features
-    subtitle: Key Features of This Application
-    multiple_formats:
-      title: Cross-Platform
-      description: Works seamlessly on Windows, macOS, and Linux with native performance.
-    high_speed:
-      title: High Performance
-      description: Built with Rust backend for blazing fast performance and low resource usage.
-    drag_drop:
-      title: Modern UI
-      description: Beautiful, responsive interface built with Vue 3 and Vuetify.
-    dark_mode:
-      title: Dark Mode
-      description: Enjoy a comfortable viewing experience with dark mode support.
-    i18n:
-      title: Internationalization
-      description: Supports multiple languages for a global user experience.
-    paste:
-      title: Secure & Safe
-      description: Built with security in mind, leveraging Tauri's security features.
+  notice:
+    title: Notice
+    content:
+      - If you plan to sell your converted avatar on marketplaces, please check the license of the assets. Many assets sold on platforms like Booth do not allow commercial use or prohibit redistribution, which may prevent you from selling your converted avatar.
+      - When uploading, it is recommended to set the LoD (Level of Detail) below Medium to 0.
+      - Since the resolution of images will be automatically converted to 1024x1024 or lower, the upload cost will be around L$ 165 including textures.
 fr:
   lead:
     subtitle: Application de bureau multiplateforme moderne
     start_button: Commencer
     description:
-      - Il s'agit d'une application de bureau moderne construite avec Tauri v2 et Vue 3, combinant la puissance de Rust avec la flexibilité des technologies web.
-      - Conçue pour la performance, la sécurité et une excellente expérience utilisateur sur Windows, macOS et Linux.
-      - Ce modèle fournit une base solide pour créer vos propres applications de bureau multiplateformes avec des outils et des pratiques modernes.
+      - Cette application exporte les avatars VRM créés avec VRoid ou des logiciels similaires au format glTF (.gdb), compatible avec Second Life.
+      - Elle est conçue pour être conviviale et efficace, permettant aux utilisateurs de convertir facilement leurs avatars VRM pour une utilisation dans Second Life.
+      - L'application est construite avec Tauri v2 et Vue 3, combinant la puissance de Rust avec la flexibilité des technologies web pour offrir une expérience fluide aux utilisateurs sur Windows, macOS et Linux.
   download:
     download: Télécharger
     windows: Télécharger pour Windows
@@ -280,35 +269,20 @@ fr:
     recommended: Recommandé
     select_platform: Sélectionnez votre plateforme
     linux_appimage_desc: Portable, indépendant de la distribution
-  features:
-    title: Fonctionnalités
-    subtitle: Fonctionnalités clés de cette application
-    multiple_formats:
-      title: Multiplateforme
-      description: Fonctionne de manière transparente sur Windows, macOS et Linux avec des performances natives.
-    high_speed:
-      title: Hautes performances
-      description: Construit avec un backend Rust pour des performances ultra-rapides et une faible utilisation des ressources.
-    drag_drop:
-      title: Interface moderne
-      description: Interface belle et réactive construite avec Vue 3 et Vuetify.
-    dark_mode:
-      title: Mode Sombre
-      description: Profitez d'une expérience visuelle confortable avec la prise en charge du mode sombre.
-    i18n:
-      title: Internationalisation
-      description: Prend en charge plusieurs langues pour une expérience utilisateur mondiale.
-    paste:
-      title: Sécurisé et sûr
-      description: Conçu avec la sécurité à l'esprit, tirant parti des fonctionnalités de sécurité de Tauri.
+  notice:
+    title: Avis
+    content:
+      - Si vous prévoyez de vendre votre avatar converti sur des marchés, veuillez vérifier la licence des actifs. De nombreux actifs vendus sur des plateformes comme Booth n'autorisent pas l'utilisation commerciale ou interdisent la redistribution, ce qui peut vous empêcher de vendre votre avatar converti.
+      - Lors du téléchargement, il est recommandé de définir le LoD (Level of Detail) en dessous de Medium à 0.
+      - Étant donné que la résolution des images sera automatiquement convertie à 1024x1024 ou moins, le coût de téléchargement sera d'environ L$ 165, y compris les textures.
 ja:
   lead:
     subtitle: モダンなクロスプラットフォームデスクトップアプリケーション
     start_button: はじめに
     description:
-      - Tauri v2とVue 3で構築されたモダンなデスクトップアプリケーション。RustのパワーとWeb技術の柔軟性を組み合わせています。
-      - Windows、macOS、Linuxで優れたパフォーマンス、セキュリティ、ユーザー体験を提供します。
-      - このテンプレートは、最新のツールとベストプラクティスを使用して独自のクロスプラットフォームデスクトップアプリケーションを構築するための強固な基盤を提供します。
+      - Vroidなどで作成したVRM形式のアバターをSecondLifeで読み込み可能なglTF（.gdb）形式にして出力します。
+      - ユーザーフレンドリーで効率的な設計で、ユーザーが簡単にVRMアバターをSecondLife用に変換できるようにします。
+      - Tauri v2とVue 3を使用して構築されており、RustのパワーとWeb技術の柔軟性を組み合わせて、Windows、macOS、Linuxのユーザーにシームレスな体験を提供します。
   download:
     download: ダウンロード
     windows: Windows版をダウンロード
@@ -322,35 +296,21 @@ ja:
     recommended: 推奨
     select_platform: プラットフォームを選択
     linux_appimage_desc: ポータブル、ディストリビューション非依存
-  features:
-    title: 機能
-    subtitle: このアプリケーションの主な機能
-    multiple_formats:
-      title: クロスプラットフォーム
-      description: Windows、macOS、Linuxでネイティブパフォーマンスをシームレスに実現。
-    high_speed:
-      title: 高性能
-      description: Rustバックエンドによる超高速なパフォーマンスと低リソース使用率。
-    dark_mode:
-      title: ダークモード
-      description: ダークモード対応で快適な閲覧体験を提供。
-    drag_drop:
-      title: モダンUI
-      description: Vue 3とVuetifyで構築された美しくレスポンシブなインターフェース。
-    i18n:
-      title: 多言語対応
-      description: 複数言語に対応し、グローバルなユーザー体験を提供。
-    paste:
-      title: セキュア＆セーフ
-      description: Tauriのセキュリティ機能を活用したセキュリティ重視の設計。
+  notice:
+    title: 注意事項
+    content:
+      - 変換したアバターをマーケットプレイスで販売したい場合は、アセットのライセンスを確認してください。
+      - Boothなどで販売されているアセットの多くは、商用利用を許可していないか、二次配布を禁止しているため、変換したアバターの販売ができない可能性があります。
+      - アップロード時は、中以下のLoD（詳細度）は0にすることを推奨します。
+      - 画像の解像度は1024x1024以下に自動変換されるため、アップロード費用はテクスチャ込みで大体、L$ 165ぐらいになります。
 ko:
   lead:
     subtitle: 현대적인 크로스 플랫폼 데스크톱 애플리케이션
     start_button: 시작하기
     description:
-      - Tauri v2와 Vue 3로 구축된 현대적인 데스크톱 애플리케이션으로, Rust의 강력함과 웹 기술의 유연성을 결합합니다.
-      - Windows, macOS 및 Linux에서 뛰어난 성능, 보안 및 사용자 경험을 제공하도록 설계되었습니다.
-      - 이 템플릿은 현대적인 도구와 모범 사례를 사용하여 크로스 플랫폼 데스크톱 애플리케이션을 구축하기 위한 견고한 기반을 제공합니다.
+      - Vroid 등으로 만든 VRM 아바타를 Second Life에서 읽을 수 있는 glTF(.gdb) 형식으로 내보냅니다.
+      - 사용자 친화적이고 효율적인 설계로 사용자가 VRM 아바타를 쉽게 Second Life용으로 변환할 수 있도록 합니다.
+      - Tauri v2와 Vue 3을 사용하여 구축되었으며, Rust의 강력함과 웹 기술의 유연성을 결합하여 Windows, macOS, Linux 사용자에게 원활한 경험을 제공합니다.
   download:
     download: 다운로드
     windows: Windows용 다운로드
@@ -364,35 +324,20 @@ ko:
     recommended: 권장
     select_platform: 플랫폼 선택
     linux_appimage_desc: 휴대 가능, 배포판 독립적
-  features:
-    title: 기능
-    subtitle: 이 애플리케이션의 주요 기능
-    multiple_formats:
-      title: 크로스 플랫폼
-      description: Windows, macOS 및 Linux에서 원활하게 작동하며 네이티브 성능을 제공합니다.
-    high_speed:
-      title: 고성능
-      description: Rust 백엔드로 구축되어 초고속 성능과 낮은 리소스 사용량을 제공합니다.
-    drag_drop:
-      title: 모던 UI
-      description: Vue 3와 Vuetify로 구축된 아름답고 반응형 인터페이스.
-    dark_mode:
-      title: 다크 모드
-      description: 다크 모드 지원으로 편안한 시청 경험 제공.
-    i18n:
-      title: 다국어 지원
-      description: 글로벌 사용자 경험을 위한 다국어 지원.
-    paste:
-      title: 안전하고 보안적
-      description: Tauri의 보안 기능을 활용하여 보안을 염두에 두고 구축되었습니다.
+  notice:
+    title: 주의 사항
+    content:
+      - 변환한 아바타를 마켓플레이스에서 판매하려는 경우, 자산의 라이선스를 확인하십시오. Booth와 같은 플랫폼에서 판매되는 많은 자산은 상업적 사용을 허용하지 않거나 재배포를 금지하므로 변환한 아바타를 판매할 수 없을 수 있습니다.
+      - 업로드 시, LoD(Level of Detail)를 Medium 이하로 설정하는 것이 권장됩니다.
+      - 이미지 해상도는 자동으로 1024x1024 이하로 변환되므로, 업로드 비용은 텍스처를 포함하여 약 L$ 165 정도입니다。
 zhHant:
   lead:
     subtitle: 現代跨平台桌面應用程式
     start_button: 入門
     description:
-      - 這是一個使用 Tauri v2 和 Vue 3 構建的現代桌面應用程式，結合了 Rust 的強大功能和 Web 技術的靈活性。
-      - 專為在 Windows、macOS 和 Linux 上提供性能、安全性和出色的用戶體驗而構建。
-      - 此範本為使用現代工具和最佳實踐構建您自己的跨平台桌面應用程式提供了堅實的基礎。
+      - 使用 VRoid 等軟體創建的 VRM 角色將被導出為與 Second Life 兼容的 glTF (.gdb) 格式。
+      - 設計為用戶友好且高效，使用戶能夠輕鬆地將 VRM 角色轉換為 Second Life 使用。
+      - 該應用程式使用 Tauri v2 和 Vue 3 構建，結合了 Rust 的強大功能和 Web 技術的靈活性，為 Windows、macOS 和 Linux 用戶提供無縫的體驗。
   download:
     download: 下載
     windows: 下載 Windows 版
@@ -402,35 +347,20 @@ zhHant:
     linux: 下載 Linux 版
     linux_x64: x64
     linux_arm64: ARM64
-  features:
-    title: 功能
-    subtitle: 此應用程式的主要功能
-    multiple_formats:
-      title: 跨平台
-      description: 在 Windows、macOS 和 Linux 上無縫運行，具有原生性能。
-    high_speed:
-      title: 高性能
-      description: 使用 Rust 後端構建，提供極快的性能和低資源使用率。
-    drag_drop:
-      title: 現代介面
-      description: 使用 Vue 3 和 Vuetify 構建的美觀、響應式介面。
-    dark_mode:
-      title: 暗黑模式
-      description: 暗黑模式支援，享受舒適的瀏覽體驗。
-    i18n:
-      title: 多語言支援
-      description: 支援多種語言以提供全球用戶體驗。
-    paste:
-      title: 安全可靠
-      description: 以安全為設計理念，利用 Tauri 的安全功能。
+  notice:
+    title: 注意事項
+    content:
+      - 如果您打算在市場上銷售轉換後的角色，請檢查資產的許可證。許多在 Booth 等平台上銷售的資產不允許商業使用或禁止再分發，這可能會阻止您銷售轉換後的角色。
+      - 上傳時，建議將 LoD（細節級別）設置為 Medium 以下為 0。
+      - 由於圖像的解析度將自動轉換為 1024x1024 或更低，因此上傳成本將約為 L$ 165，包括紋理。
 zhHans:
   lead:
     subtitle: 现代跨平台桌面应用程序
     start_button: 入门
     description:
-      - 这是一个使用 Tauri v2 和 Vue 3 构建的现代桌面应用程序，结合了 Rust 的强大功能和 Web 技术的灵活性。
-      - 专为在 Windows、macOS 和 Linux 上提供性能、安全性和出色的用户体验而构建。
-      - 此模板为使用现代工具和最佳实践构建您自己的跨平台桌面应用程序提供了坚实的基础。
+      - 使用 VRoid 等软件创建的 VRM 角色将被导出为与 Second Life 兼容的 glTF (.gdb) 格式。
+      - 设计为用户友好且高效，使用户能够轻松地将 VRM 角色转换为 Second Life 使用。
+      - 该应用程序使用 Tauri v2 和 Vue 3 构建，结合了 Rust 的强大功能和 Web 技术的灵活性，为 Windows、macOS 和 Linux 用户提供无缝的体验。
   download:
     download: 下载安装
     windows: 下载安装 Windows 版
@@ -440,25 +370,10 @@ zhHans:
     linux: 下载安装 Linux 版
     linux_x64: x64
     linux_arm64: ARM64
-  features:
-    title: 功能
-    subtitle: 此应用程序的主要功能
-    multiple_formats:
-      title: 跨平台
-      description: 在 Windows、macOS 和 Linux 上无缝运行，具有原生性能。
-    high_speed:
-      title: 高性能
-      description: 使用 Rust 后端构建，提供极快的性能和低资源使用率。
-    drag_drop:
-      title: 现代界面
-      description: 使用 Vue 3 和 Vuetify 构建的美观、响应式界面。
-    dark_mode:
-      title: 暗黑模式
-      description: 暗黑模式支持，享受舒适的浏览体验。
-    i18n:
-      title: 多语言支持
-      description: 支持多种语言以提供全球用户体验。
-    paste:
-      title: 安全可靠
-      description: 以安全为设计理念，利用 Tauri 的安全功能。
+  notice:
+    title: 注意事项
+    content:
+      - 如果您打算在市场上销售转换后的角色，请检查资产的许可证。许多在 Booth 等平台上销售的资产不允许商业使用或禁止再分发，这可能会阻止您销售转换后的角色。
+      - 上传时，建议将 LoD（细节级别）设置为 Medium 以下为 0。
+      - 由于图像的分辨率将自动转换为 1024x1024 或更低，因此上传成本将约为 L$ 165，包括纹理。
 </i18n>

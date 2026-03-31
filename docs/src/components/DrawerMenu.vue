@@ -21,31 +21,31 @@ const items: ComputedRef<DrawerMenuItem[]> = computed(() => [
   },
   {
     title: t('publishing'),
-    icon: 'mdi-package-variant',
-    to: localePath('/publishing')
+    icon: 'mdi-package-variant'
+    //to: localePath('/publishing')
   },
   {
     title: '-' // Divider
   },
   {
     title: t('build_windows'),
-    icon: 'mdi-microsoft-windows',
-    to: localePath('/build-windows')
+    icon: 'mdi-microsoft-windows'
+    //to: localePath('/build-windows')
   },
   {
     title: t('build_macos'),
-    icon: 'mdi-apple',
-    to: localePath('/build-macos')
+    icon: 'mdi-apple'
+    //to: localePath('/build-macos')
   },
   {
     title: t('build_linux'),
-    icon: 'mdi-linux',
-    to: localePath('/build-linux')
+    icon: 'mdi-linux'
+    //to: localePath('/build-linux')
   },
   {
     title: t('build_linux_docker'),
-    icon: 'mdi-docker',
-    to: localePath('/build-linux-docker')
+    icon: 'mdi-docker'
+    //to: localePath('/build-linux-docker')
   }
 ]);
 </script>
