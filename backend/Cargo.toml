@@ -4,7 +4,7 @@ version = "0.8.2-alpha.0"
 default-run = "vrm2sl-tauri"
 authors = ["Logue <logue@hotmail.co.jp>"]
 edition = "2024"
-rust-version = "1.94.0"
+rust-version = "1.94.1"
 description = "VRM to Second Life converter desktop backend"
 readme = "../README.md"
 repository = "https://github.com/logue/vrm2sl"
@@ -24,7 +24,7 @@ tauri-build = { version = "2.5.6", features = [] }
 anyhow = "1.0.102"
 base64 = "0.22.1"
 gltf = { version = "1.4.1", features = ["import", "names"] }
-nalgebra = "0.34.1"
+nalgebra = "0.34.2"
 image = "0.25.10"
 serde = "1.0.228"
 serde_json = "1.0.149"
