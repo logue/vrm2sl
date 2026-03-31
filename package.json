@@ -25,6 +25,7 @@
   "scripts": {
     "dev": "pnpm --filter frontend dev",
     "dev:tauri": "pnpm --filter frontend dev:tauri",
+    "dev:docs": "pnpm --filter docs dev",
     "clean": "pnpm --recursive exec rimraf node_modules/.vite",
     "build": "pnpm --filter frontend build",
     "build:analyze": "pnpm --filter frontend build:analyze",
@@ -33,6 +34,7 @@
     "build:tauri:mac": "pnpm --filter frontend build:tauri --target universal-apple-darwin",
     "build:tauri:linux-x64": "pnpm --filter frontend build:tauri:linux-docker-x64",
     "build:tauri:linux-arm64": "pnpm --filter frontend build:tauri:linux-docker-arm64",
+    "build:docs": "pnpm --filter docs build",
     "lint": "pnpm --filter frontend lint",
     "preview": "pnpm --filter frontend preview",
     "type-check": "pnpm --recursive exec vue-tsc --build --force",
