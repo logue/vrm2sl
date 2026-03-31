@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+
 import * as THREE from 'three';
+
 import type { ConvertOptions } from '@/interfaces';
-import { detectGenderFromVrm, resolveMotionPath } from '@/composables/useVrmGender';
+
 import { useAvatarAnimation } from '@/composables/useAvatarAnimation';
+import { detectGenderFromVrm, resolveMotionPath } from '@/composables/useVrmGender';
 import { useVrmPreviewScene } from '@/composables/useVrmPreviewScene';
 
 const props = defineProps<{
@@ -114,11 +117,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <v-card>
-    <v-card-title>
-      <v-icon icon="mdi-cube-outline" class="mr-2" />
-      {{ t('title') }}
-    </v-card-title>
+  <v-card :title="t('title')" prepend-icon="mdi-cube-outline">
     <v-card-text>
       <div ref="canvasHost" class="preview-host" />
       <div class="d-flex flex-wrap ga-3 align-center mt-3">

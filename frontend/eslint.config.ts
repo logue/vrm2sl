@@ -1,17 +1,16 @@
 import configPrettier from '@vue/eslint-config-prettier';
 import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript';
 
-import { globalIgnores } from 'eslint/config';
 import pluginVueI18n from '@intlify/eslint-plugin-vue-i18n';
+import { globalIgnores } from 'eslint/config';
 import pluginImport from 'eslint-plugin-import-x';
 import pluginOxlint from 'eslint-plugin-oxlint';
 // @ts-ignore
 import pluginSecurity from 'eslint-plugin-security';
 import pluginVue from 'eslint-plugin-vue';
 import pluginVueA11y from 'eslint-plugin-vuejs-accessibility';
-import pluginYml from 'eslint-plugin-yml';
-// @ts-ignore
 import pluginVuetify from 'eslint-plugin-vuetify';
+import pluginYml from 'eslint-plugin-yml';
 
 // To allow more languages other than `ts` in `.vue` files, uncomment the following lines:
 // import { configureVueProject } from '@vue/eslint-config-typescript'
@@ -118,7 +117,6 @@ export default defineConfigWithVueTs(
       'import-x/no-default-export': 'off',
       'import-x/no-named-as-default-member': 'off',
       'import-x/no-named-as-default': 'off',
-      /*
       // Sort Import Order.
       // see https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/order.md#importorder-enforce-a-convention-in-module-import-order
       'import-x/order': [
@@ -147,7 +145,6 @@ export default defineConfigWithVueTs(
           'newlines-between': 'always'
         }
       ],
-      */
       // A tag with no content should be written like <br />.
       'vue/html-self-closing': [
         'error',

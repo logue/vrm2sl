@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n';
 import { useConfigStore } from '@/store';
+import { useI18n } from 'vue-i18n';
 
 import LocaleSelector from './LocaleSelector.vue';
 import AboutDialog from './modals/AboutDialog.vue';

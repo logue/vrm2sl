@@ -1,5 +1,5 @@
-import { createApp } from 'vue';
 import { pinia } from '@/store';
+import { createApp } from 'vue';
 
 import '@/styles/settings.scss';
 import App from '@/App.vue';

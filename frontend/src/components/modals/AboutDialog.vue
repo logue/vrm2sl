@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n';
 
-import Meta from '@/Meta';
 import { openUrl } from '@tauri-apps/plugin-opener';
+
+import Meta from '@/Meta';
 
 const { t } = useI18n();
 

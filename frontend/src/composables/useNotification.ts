@@ -1,9 +1,10 @@
+import type { ComposerTranslation } from 'vue-i18n';
+
 import {
   isPermissionGranted,
   requestPermission,
   sendNotification
 } from '@tauri-apps/plugin-notification';
-import type { ComposerTranslation } from 'vue-i18n';
 
 /**
  * デスクトップ通知を送信するためのcomposable

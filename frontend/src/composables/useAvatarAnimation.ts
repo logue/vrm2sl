@@ -3,10 +3,13 @@
 // global resources and therefore reports the keys as missing. Suppress those
 // warnings for this file since the keys are correct at runtime.
 /* eslint-disable @intlify/vue-i18n/no-missing-keys */
-import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 import { ref, type Ref } from 'vue';
+
 import * as THREE from 'three';
+import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
+
 import { buildRetargetedClip, buildProceduralIdleClip } from './useBvhRetargeting';
+
 import type { MotionMode } from './useVrmGender';
 
 // Accept any string key to work with component-scoped <i18n> blocks that are

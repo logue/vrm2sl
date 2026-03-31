@@ -1,9 +1,11 @@
+import { ref, type Ref } from 'vue';
+
 import { invoke } from '@tauri-apps/api/core';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { ref, type Ref } from 'vue';
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+
 import type { ConvertOptions } from '@/interfaces';
 
 export interface UseVrmPreviewSceneOptions {
@@ -257,6 +259,8 @@ export function useVrmPreviewScene({
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // 色空間の設定。これをしないと、VRMモデルの色が暗くなってしまう。 -- IGNORE
+    // Color space settings. If you don't do this, the VRM model's colors will appear darker. -- IGNORE
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(renderer.domElement);
 
@@ -275,6 +279,9 @@ export function useVrmPreviewScene({
     // Light from the +X side to illuminate the avatar's front face.
     directional.position.set(1.5, 2.5, 0.5);
     scene.add(directional);
+
+    // Additional fill light to brighten shadows and improve visibility of details.
+    scene.add(new THREE.AmbientLight(0xffffff, 2));
 
     const grid = new THREE.GridHelper(10, 20, 0x555555, 0x333333);
     scene.add(grid);

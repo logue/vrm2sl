@@ -1,5 +1,5 @@
 {
-  "name": "vrm2sl-app",
+  "name": "vrm2sl",
   "description": "VRM to Second Life converter desktop app built with Tauri v2 and Vue 3",
   "license": "MIT",
   "type": "module",

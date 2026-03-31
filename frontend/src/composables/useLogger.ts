@@ -1,6 +1,7 @@
-import { listen } from '@tauri-apps/api/event';
-import { onMounted } from 'vue';
 import { useGlobalStore } from '@/store';
+import { onMounted } from 'vue';
+
+import { listen } from '@tauri-apps/api/event';
 
 export function useLogger() {
   const globalStore = useGlobalStore();
