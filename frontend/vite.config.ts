@@ -38,6 +38,10 @@ const appDescription = loadEnvValue('APP_DESCRIPTION', 'A modern desktop applica
 const appSummary = loadEnvValue('APP_SUMMARY', 'Modern desktop application template');
 const authorName = loadEnvValue('AUTHOR_NAME', 'Your Name');
 const projectSite = loadEnvValue('PROJECT_URL', 'https://github.com');
+const tauriAppIdentifier = loadEnvValue(
+  'TAURI_APP_IDENTIFIER',
+  `com.${appNameKebab.replace(/-/g, '.')}`
+);
 
 /**
  * Vite Configure
@@ -229,7 +233,7 @@ export default meta;
     tauriConf.productName = appNameKebab;
     tauriConf.mainBinaryName = appName;
     tauriConf.version = version;
-    tauriConf.identifier = `com.${appNameKebab.replace(/-/g, '.')}`;
+    tauriConf.identifier = '${TAURI_APP_IDENTIFIER}';
 
     if (tauriConf.app?.windows?.[0]) {
       tauriConf.app.windows[0].title = appName;
@@ -248,6 +252,10 @@ export default meta;
     writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
   } catch (error) {
     console.warn('Failed to update tauri.conf.json:', error);
+  }
+
+  if (!tauriAppIdentifier) {
+    console.warn('TAURI_APP_IDENTIFIER is empty in .env');
   }
 
   return config;

@@ -8,6 +8,3 @@ onlyBuiltDependencies:
   - esbuild
   - unrs-resolver
   - vue-demi
-
-patchedDependencies:
-  vuetify@4.0.4: patches/vuetify@4.0.4.patch

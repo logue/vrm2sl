@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const configPath = path.join(repoRoot, "backend", "tauri.conf.json");
+const tauriRunnerPath = path.join(repoRoot, "scripts", "run-tauri.mjs");
 const tempConfigPath = path.join(
   repoRoot,
   "backend",
@@ -21,11 +22,10 @@ function toMsiCompatibleVersion(version) {
 }
 
 function runTauriBuild(configToUse, extraArgs) {
-  const tauriCommand = process.platform === "win32" ? "tauri.cmd" : "tauri";
   return new Promise((resolve) => {
     const child = spawn(
-      tauriCommand,
-      ["build", "--config", configToUse, ...extraArgs],
+      process.execPath,
+      [tauriRunnerPath, "build", "--config", configToUse, ...extraArgs],
       {
         cwd: repoRoot,
         stdio: "inherit",
@@ -90,7 +90,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exit(1);
-});
+}
