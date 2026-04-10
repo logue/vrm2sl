@@ -19,7 +19,8 @@
     "pnpm": ">=10"
   },
   "workspaces": [
-    "frontend"
+    "frontend",
+    "docs"
   ],
   "packageManager": "pnpm@10.33.0",
   "scripts": {
@@ -42,6 +43,10 @@
     "tauri": "pnpm --filter frontend tauri"
   },
   "resolutions": {
-    "js-yaml": ">=4.1.1"
+    "lodash": ">=4.18.1",
+    "js-yaml": ">=4.1.1",
+    "defu": ">=6.1.7",
+    "vite": ">=8.0.8",
+    "unhead": ">=3.0.2"
   }
 }

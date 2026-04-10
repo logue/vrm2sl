@@ -84,16 +84,16 @@ const pickInputFile = async () => {
 };
 
 const pickOutputFile = async () => {
-  // 入力ファイル名から拡張子を除去し.gdbを付与
-  let defaultName = 'output.gdb';
+  // 入力ファイル名から拡張子を除去し.glbを付与
+  let defaultName = 'output.glb';
   if (inputPath.value) {
     const inputFile = inputPath.value.split(/[\\/]/).pop() || '';
     const base = inputFile.replace(/\.[^/.]+$/, '');
-    defaultName = base + '.gdb';
+    defaultName = base + '.glb';
   }
   const selected = await fs.saveFile({
     defaultPath: outputPath.value || defaultName,
-    filters: [{ name: 'GDB', extensions: ['gdb'] }]
+    filters: [{ name: 'GLB', extensions: ['glb'] }]
   });
   if (selected) {
     outputPath.value = selected;
