@@ -31,7 +31,8 @@ backend/gen/
 #.idea/
 
 frontend/src/Meta.ts
-vrm/*.glb
+vrm/*.glßb
 vrm/*.json
 .DS_Store
 /backend/tauri.conf.msi-temp.json
+vrm/rurune式重音テト_paid2.vrm

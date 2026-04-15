@@ -191,7 +191,125 @@ pub(super) fn extract_humanoid_bone_nodes(json: &Value) -> HashMap<String, usize
         }
     }
 
+    repair_thumb_chain_mapping(json, &mut mapping);
+
     mapping
+}
+
+fn repair_thumb_chain_mapping(json: &Value, mapping: &mut HashMap<String, usize>) {
+    for side in ["left", "right"] {
+        let proximal_key = format!("{side}ThumbProximal");
+        let intermediate_key = format!("{side}ThumbIntermediate");
+        let distal_key = format!("{side}ThumbDistal");
+
+        let Some(proximal_idx) = mapping.get(&proximal_key).copied() else {
+            continue;
+        };
+        let Some(_distal_idx) = mapping.get(&distal_key).copied() else {
+            continue;
+        };
+        if mapping.contains_key(&intermediate_key) {
+            continue;
+        }
+
+        let Some(parent_map) = collect_parent_index_map_from_json_value(json) else {
+            continue;
+        };
+
+        if let Some(parent_idx) = parent_map.get(&proximal_idx).copied()
+            && is_thumb_node_for_side(json, parent_idx, side)
+        {
+            // Typical VRM1.0/VRoid anomaly:
+            // - ThumbIntermediate is missing
+            // - ThumbProximal points to authored Thumb2
+            // In that case, shift chain by one so SL receives Thumb1/2/3.
+            mapping.insert(intermediate_key.clone(), proximal_idx);
+            mapping.insert(proximal_key.clone(), parent_idx);
+            continue;
+        }
+
+        if let Some((thumb1, thumb2, thumb3)) = find_thumb_chain_by_name(json, side) {
+            mapping.insert(proximal_key.clone(), thumb1);
+            mapping.insert(intermediate_key, thumb2);
+            mapping.insert(distal_key, thumb3);
+        }
+    }
+}
+
+fn collect_parent_index_map_from_json_value(json: &Value) -> Option<HashMap<usize, usize>> {
+    let nodes = json.get("nodes").and_then(Value::as_array)?;
+    let mut parent_map = HashMap::<usize, usize>::new();
+    for (parent_idx, node) in nodes.iter().enumerate() {
+        let Some(children) = node.get("children").and_then(Value::as_array) else {
+            continue;
+        };
+        for child in children {
+            if let Some(child_idx) = child.as_u64().map(|v| v as usize) {
+                parent_map.insert(child_idx, parent_idx);
+            }
+        }
+    }
+    Some(parent_map)
+}
+
+fn is_thumb_node_for_side(json: &Value, node_index: usize, side: &str) -> bool {
+    let Some(name) = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| nodes.get(node_index))
+        .and_then(|node| node.get("name"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+
+    let lower = name.to_ascii_lowercase();
+    if !lower.contains("thumb") {
+        return false;
+    }
+
+    match side {
+        "left" => name.contains("_L_") || lower.contains("left"),
+        "right" => name.contains("_R_") || lower.contains("right"),
+        _ => false,
+    }
+}
+
+fn find_thumb_chain_by_name(json: &Value, side: &str) -> Option<(usize, usize, usize)> {
+    let nodes = json.get("nodes").and_then(Value::as_array)?;
+    let mut thumb1 = None;
+    let mut thumb2 = None;
+    let mut thumb3 = None;
+
+    for (idx, node) in nodes.iter().enumerate() {
+        let Some(name) = node.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if !is_name_for_side(name, side) {
+            continue;
+        }
+        if name.contains("Thumb1") {
+            thumb1 = Some(idx);
+        } else if name.contains("Thumb2") {
+            thumb2 = Some(idx);
+        } else if name.contains("Thumb3") {
+            thumb3 = Some(idx);
+        }
+    }
+
+    match (thumb1, thumb2, thumb3) {
+        (Some(a), Some(b), Some(c)) => Some((a, b, c)),
+        _ => None,
+    }
+}
+
+fn is_name_for_side(name: &str, side: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    match side {
+        "left" => name.contains("_L_") || lower.contains("left"),
+        "right" => name.contains("_R_") || lower.contains("right"),
+        _ => false,
+    }
 }
 
 // ─── Metadata extraction ──────────────────────────────────────────────────────

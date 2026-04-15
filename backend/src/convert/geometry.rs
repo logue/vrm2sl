@@ -224,6 +224,14 @@ pub(super) fn bake_scale_into_geometry(
 /// the updated world joint positions by a subsequent pipeline stage.
 pub(super) fn orient_avatar_for_sl(json: &mut Value, bin: &mut [u8]) -> Result<()> {
     // ── 1. Rotate node translations via Ry(90°): new_x = old_z, new_z = -old_x
+    //
+    // Node local *rotations* are intentionally NOT transformed here.
+    // All SL-mapped bones (including fingers) have already had their world
+    // positions preserved in the correct post-Ry(90°) space by
+    // normalize_sl_bone_rotations, and their local rotations must stay in the
+    // local frame so that SL Bento animations drive the correct curl axes.
+    // Applying a basis change to quaternions here caused a double-transform
+    // that rotated every finger ~90° and made hand animations curl sideways.
     let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
     for i in 0..node_count {
         if let Some(t) = json["nodes"][i]

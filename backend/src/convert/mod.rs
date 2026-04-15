@@ -36,14 +36,13 @@ use material::{
     validate_and_fix_texture_references,
 };
 use skeleton::{
-    correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
-    normalize_sl_bone_rotations, promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy,
-    regenerate_inverse_bind_matrices, rename_bones, set_skin_skeleton_root,
-    validate_bone_conversion_preconditions,
+    ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations,
+    promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices,
+    rename_bones, set_skin_skeleton_root, validate_bone_conversion_preconditions,
 };
 use skinning::{
     collapse_secondary_head_skins_to_primary, merge_head_only_skins_into_primary,
-    optimize_skinning_weights_and_joints, remap_unmapped_bone_weights, soften_face_eye_influences,
+    soften_face_eye_influences,
 };
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
@@ -363,15 +362,17 @@ fn transform_and_write_glb(
     // orientations in the SL skeleton; any non-identity rotation baked into
     // the node hierarchy will therefore cause incorrect deformation.
     let pre_normalization_worlds = normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
-    // Counter-rotate mesh vertices so the mesh shape stays visually identical
-    // under the new identity-rotation bind pose. This is the programmatic
-    // equivalent of Blender's "Apply Rotation and Scale" on the armature.
-    correct_mesh_vertices_for_bind_pose_change(&json, &mut bin, &pre_normalization_worlds)?;
-    // Remap weights from unmapped VRM bones (e.g. upperChest, spring bones)
-    // to their nearest mapped-SL ancestor so that only valid SL bones remain
-    // in the skin joints list after optimization.
-    remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
-    optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    // NOTE:
+    // Some SL runtimes appear to handle bind/rest rotations differently from
+    // standard glTF skinning. Applying this correction can over-deform hands
+    // during Bento animations on certain VRoid sources, so keep it disabled
+    // for now while preserving joint/IBM regeneration below.
+    let _ = pre_normalization_worlds;
+    // NOTE:
+    // Hand deformation debugging: keep original joint/weight distribution to
+    // avoid aggressive ancestor remapping around fingers.
+    // remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
+    // optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
     soften_face_eye_influences(&mut json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Reassign Face and Hair mesh nodes to the primary (Body) skin so that SL
@@ -898,6 +899,34 @@ mod tests {
     }
 
     #[test]
+    fn given_vrmc_thumb_intermediate_missing_when_extracting_then_thumb_chain_is_repaired() {
+        let input_json = serde_json::json!({
+            "nodes": [
+                {"name": "J_Bip_L_Hand", "children": [1]},
+                {"name": "J_Bip_L_Thumb1", "children": [2]},
+                {"name": "J_Bip_L_Thumb2", "children": [3]},
+                {"name": "J_Bip_L_Thumb3"}
+            ],
+            "extensions": {
+                "VRMC_vrm": {
+                    "humanoid": {
+                        "humanBones": {
+                            "leftThumbProximal": {"node": 2},
+                            "leftThumbDistal": {"node": 3}
+                        }
+                    }
+                }
+            }
+        });
+
+        let mapping = extract_humanoid_bone_nodes(&input_json);
+
+        assert_eq!(mapping.get("leftThumbProximal"), Some(&1usize));
+        assert_eq!(mapping.get("leftThumbIntermediate"), Some(&2usize));
+        assert_eq!(mapping.get("leftThumbDistal"), Some(&3usize));
+    }
+
+    #[test]
     fn given_invalid_humanoid_node_index_when_validating_preconditions_then_error_is_reported() {
         let input_json = serde_json::json!({
             "nodes": [
@@ -996,6 +1025,96 @@ mod tests {
             .unwrap_or_default();
 
         assert_eq!(rotation, original_rotation);
+    }
+
+    #[test]
+    fn given_finger_child_when_parent_is_normalized_then_world_position_is_preserved() {
+        let mut input_json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mWristLeft",
+                    "rotation": [0.0, 0.0, 0.2, 0.98],
+                    "translation": [0.1, 1.0, 0.0],
+                    "children": [1]
+                },
+                {
+                    "name": "mHandIndex1Left",
+                    "rotation": [0.0, 0.12, -0.04, 0.99],
+                    "translation": [0.03, 0.0, -0.01]
+                }
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("leftHand".to_string(), 0usize),
+            ("leftIndexProximal".to_string(), 1usize),
+        ]);
+
+        let before_locals = input_json["nodes"]
+            .as_array()
+            .expect("nodes should be array")
+            .iter()
+            .map(node_to_local_matrix)
+            .collect::<Vec<_>>();
+        let before_world = compute_node_world_matrices(
+            &before_locals,
+            &collect_parent_index_map_from_json(&input_json),
+        );
+
+        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+
+        let after_locals = input_json["nodes"]
+            .as_array()
+            .expect("nodes should be array")
+            .iter()
+            .map(node_to_local_matrix)
+            .collect::<Vec<_>>();
+        let after_world = compute_node_world_matrices(
+            &after_locals,
+            &collect_parent_index_map_from_json(&input_json),
+        );
+
+        let bt = Vector3::new(
+            before_world[1][(0, 3)],
+            before_world[1][(1, 3)],
+            before_world[1][(2, 3)],
+        );
+        let at = Vector3::new(
+            after_world[1][(0, 3)],
+            after_world[1][(1, 3)],
+            after_world[1][(2, 3)],
+        );
+        assert!((bt - at).norm() < 1e-4);
+
+        let parent_rotation = input_json
+            .pointer("/nodes/0/rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            parent_rotation,
+            vec![
+                Value::from(0.0),
+                Value::from(0.0),
+                Value::from(0.0),
+                Value::from(1.0)
+            ]
+        );
+
+        let finger_rotation = input_json
+            .pointer("/nodes/1/rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            finger_rotation,
+            vec![
+                Value::from(0.0),
+                Value::from(0.12),
+                Value::from(-0.04),
+                Value::from(0.99)
+            ]
+        );
     }
 
     #[test]

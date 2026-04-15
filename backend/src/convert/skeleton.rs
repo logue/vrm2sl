@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
-use nalgebra::{Matrix4, Vector3, Vector4};
+use nalgebra::{Matrix3, Matrix4, UnitQuaternion, Vector3, Vector4};
 use serde_json::Value;
 
 use super::gltf_utils::{
@@ -14,11 +14,34 @@ use super::types::{
 };
 
 fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
-    if matches!(vrm_bone_name, "leftEye" | "rightEye") {
+    if matches!(
+        vrm_bone_name,
+        "leftEye" | "rightEye" | "leftHand" | "rightHand"
+    ) {
         return true;
     }
 
-    // Keep finger rest rotations so Bento finger curl/twist axes do not drift.
+    // Thumbs have complex authored rotations that encode their natural
+    // orientation; preserve them.  The other four finger chains have
+    // near-identity proximal rotations in VRM but small residual Y/Z
+    // values that accumulate into a visible lean in SL, so we normalise
+    // them to identity while keeping their translations intact.
+    const THUMB_BASES: [&str; 2] = ["leftThumb", "rightThumb"];
+    const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
+
+    THUMB_BASES.iter().any(|base| {
+        vrm_bone_name.starts_with(base)
+            && FINGER_SEGMENTS
+                .iter()
+                .any(|segment| vrm_bone_name.ends_with(segment))
+    })
+}
+
+fn should_preserve_local_translation(vrm_bone_name: &str) -> bool {
+    if matches!(vrm_bone_name, "leftHand" | "rightHand") {
+        return true;
+    }
+
     const FINGER_BASES: [&str; 10] = [
         "leftThumb",
         "leftIndex",
@@ -31,7 +54,6 @@ fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
         "rightRing",
         "rightLittle",
     ];
-
     const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
 
     FINGER_BASES.iter().any(|base| {
@@ -260,10 +282,23 @@ pub(super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
 ) -> Vec<Matrix4<f32>> {
-    let sl_node_indices: HashSet<usize> = BONE_MAP
+    let mapped_sl_node_indices: HashSet<usize> = BONE_MAP
+        .iter()
+        .chain(BENTO_BONE_MAP.iter())
+        .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
+        .collect();
+
+    let rotation_normalize_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
         .filter(|(vrm_name, _)| !should_skip_rotation_normalization(vrm_name))
+        .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
+        .collect();
+
+    let preserve_translation_node_indices: HashSet<usize> = BONE_MAP
+        .iter()
+        .chain(BENTO_BONE_MAP.iter())
+        .filter(|(vrm_name, _)| should_preserve_local_translation(vrm_name))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
@@ -294,16 +329,58 @@ pub(super) fn normalize_sl_bone_rotations(
         }
     }
 
-    let mut effective_world_t: Vec<Vector3<f32>> = node_worlds_snapshot
-        .iter()
-        .map(|m| Vector3::new(m[(0, 3)], m[(1, 3)], m[(2, 3)]))
-        .collect();
-    while effective_world_t.len() < node_count {
-        effective_world_t.push(Vector3::zeros());
+    // Track effective world matrices while we rewrite mapped bone locals.
+    // Start from the original snapshot; then recompute in topological order so
+    // parent changes (identity-rotation normalization) propagate correctly.
+    let mut effective_world = node_worlds_snapshot.clone();
+    while effective_world.len() < node_count {
+        effective_world.push(Matrix4::identity());
     }
 
+    // Keep a snapshot of the original locals for non-mapped nodes.
+    let mut original_locals = node_locals.clone();
+    while original_locals.len() < node_count {
+        original_locals.push(Matrix4::identity());
+    }
+
+    let extract_rotation_3x3 = |world: &Matrix4<f32>| {
+        let mut basis = Matrix3::new(
+            world[(0, 0)],
+            world[(0, 1)],
+            world[(0, 2)],
+            world[(1, 0)],
+            world[(1, 1)],
+            world[(1, 2)],
+            world[(2, 0)],
+            world[(2, 1)],
+            world[(2, 2)],
+        );
+
+        // Normalize each column to remove scale.
+        for c in 0..3 {
+            let col_norm = (basis[(0, c)] * basis[(0, c)]
+                + basis[(1, c)] * basis[(1, c)]
+                + basis[(2, c)] * basis[(2, c)])
+                .sqrt();
+            if col_norm > 1e-8 {
+                basis[(0, c)] /= col_norm;
+                basis[(1, c)] /= col_norm;
+                basis[(2, c)] /= col_norm;
+            }
+        }
+
+        basis
+    };
+
     for &node_idx in &topo_order {
-        if !sl_node_indices.contains(&node_idx) {
+        let parent_world = match parent_map.get(&node_idx) {
+            Some(&parent_idx) => effective_world[parent_idx],
+            None => Matrix4::identity(),
+        };
+
+        if !mapped_sl_node_indices.contains(&node_idx) {
+            // Non-mapped nodes keep their original local transform.
+            effective_world[node_idx] = parent_world * original_locals[node_idx];
             continue;
         }
 
@@ -312,29 +389,81 @@ pub(super) fn normalize_sl_bone_rotations(
             None => continue,
         };
 
-        let parent_effective_t = match parent_map.get(&node_idx) {
-            Some(&parent_idx) => effective_world_t[parent_idx],
-            None => Vector3::zeros(),
-        };
+        // Extract parent's translation and rotation (scale-normalized).
+        let parent_t = Vector3::new(
+            parent_world[(0, 3)],
+            parent_world[(1, 3)],
+            parent_world[(2, 3)],
+        );
+        let parent_rot_3x3 = extract_rotation_3x3(&parent_world);
+        let parent_rot = UnitQuaternion::from_matrix(&parent_rot_3x3);
 
-        let local_t = snapshot_t - parent_effective_t;
-        effective_world_t[node_idx] = parent_effective_t + local_t;
+        // Compute local translation in parent's local coordinate frame.
+        let world_offset = snapshot_t - parent_t;
+        let local_t = parent_rot.inverse() * world_offset;
+
+        let will_normalize = rotation_normalize_node_indices.contains(&node_idx);
+        let preserve_local_translation = preserve_translation_node_indices.contains(&node_idx);
 
         if let Some(obj) = json["nodes"][node_idx].as_object_mut() {
-            obj.remove("matrix");
-            obj.insert(
-                "translation".to_string(),
-                serde_json::json!([local_t.x, local_t.y, local_t.z]),
-            );
-            obj.insert(
-                "rotation".to_string(),
-                serde_json::json!([0.0, 0.0, 0.0, 1.0]),
-            );
-            // Force identity scale: Second Life does not use bone scale and
-            // any residual non-unit scale (even near-identity values like
-            // 0.9999998) will cause IBM/joint-position mismatches that
-            // manifest as mesh twisting or offset bones.
+            if !preserve_local_translation {
+                obj.remove("matrix");
+                obj.insert(
+                    "translation".to_string(),
+                    serde_json::json!([local_t.x, local_t.y, local_t.z]),
+                );
+            }
+
+            // Force identity scale for ALL mapped bones.
+            // Even tiny residual non-unit scales on preserved finger bones can
+            // inject lateral drift/twisting once IBMs are regenerated and SL
+            // animations are applied.
             obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
+
+            if will_normalize {
+                obj.insert(
+                    "rotation".to_string(),
+                    serde_json::json!([0.0, 0.0, 0.0, 1.0]),
+                );
+            }
+        }
+
+        let local_after = node_to_local_matrix(&json["nodes"][node_idx]);
+        effective_world[node_idx] = parent_world * local_after;
+    }
+
+    // Diagnostic: log finger bone transforms for debugging.
+    if std::env::var("VRM2SL_DEBUG_FINGERS").is_ok() {
+        let finger_names = [
+            "mHandThumb1Left",
+            "mHandThumb2Left",
+            "mHandThumb3Left",
+            "mHandIndex1Left",
+            "mHandIndex2Left",
+            "mHandIndex3Left",
+            "mHandMiddle1Left",
+            "mHandMiddle2Left",
+            "mHandMiddle3Left",
+            "mHandRing1Left",
+            "mHandRing2Left",
+            "mHandRing3Left",
+            "mHandPinky1Left",
+            "mHandPinky2Left",
+            "mHandPinky3Left",
+        ];
+        if let Some(nodes) = json.get("nodes").and_then(Value::as_array) {
+            for node in nodes.iter() {
+                if let Some(name) = node.get("name").and_then(Value::as_str) {
+                    if finger_names.contains(&name) {
+                        let rot = node.get("rotation").and_then(Value::as_array).cloned();
+                        let trans = node.get("translation").and_then(Value::as_array).cloned();
+                        eprintln!(
+                            "[FINGER] {} rotation: {:?} translation: {:?}",
+                            name, rot, trans
+                        );
+                    }
+                }
+            }
         }
     }
 
