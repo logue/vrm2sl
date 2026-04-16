@@ -21,9 +21,8 @@ fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
         return true;
     }
 
-    // Finger chains need their authored local axes preserved so SL Bento
-    // curl animations bend them in the intended plane. Normalizing non-thumb
-    // fingers to identity makes them curl inward toward the middle finger.
+    // Preserve authored local rotation for all finger chains so custom hand
+    // animations keep the intended local axis basis.
     const FINGER_BASES: [&str; 10] = [
         "leftThumb",
         "leftIndex",

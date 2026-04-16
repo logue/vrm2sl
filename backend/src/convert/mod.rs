@@ -41,8 +41,9 @@ use skeleton::{
     rename_bones, set_skin_skeleton_root, validate_bone_conversion_preconditions,
 };
 use skinning::{
-    collapse_secondary_head_skins_to_primary, merge_head_only_skins_into_primary,
-    remap_secondary_chest_head_weights, soften_face_eye_influences,
+    cleanup_cross_finger_family_weights, collapse_secondary_head_skins_to_primary,
+    merge_head_only_skins_into_primary, remap_secondary_chest_head_weights,
+    soften_face_eye_influences,
 };
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
@@ -372,6 +373,9 @@ fn transform_and_write_glb(
     // so upperChest/bust chains do not collapse the torso before upload.
     // Hand-side helpers remain untouched to avoid reintroducing finger issues.
     remap_secondary_chest_head_weights(&mut json, &mut bin, humanoid_bone_nodes);
+    // Prevent cross-finger skinning blends (e.g. index+middle on same vertex)
+    // from pulling fingers inward during Bento hand animations.
+    cleanup_cross_finger_family_weights(&mut json, &mut bin);
     soften_face_eye_influences(&mut json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Reassign Face and Hair mesh nodes to the primary (Body) skin so that SL
@@ -815,7 +819,8 @@ mod tests {
         validate_bone_conversion_preconditions,
     };
     use super::skinning::{
-        optimize_skinning_weights_and_joints, remap_secondary_chest_head_weights,
+        cleanup_cross_finger_family_weights, optimize_skinning_weights_and_joints,
+        remap_secondary_chest_head_weights,
     };
     use super::validation::{
         estimate_texture_fee, extract_humanoid_bone_nodes, projected_texture_size,
@@ -997,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn given_finger_bone_when_normalizing_then_local_rotation_is_preserved() {
+    fn given_non_thumb_finger_bone_when_normalizing_then_local_rotation_is_preserved() {
         let original_rotation = vec![
             Value::from(0.0),
             Value::from(0.12),
@@ -1107,6 +1112,7 @@ mod tests {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+
         assert_eq!(
             finger_rotation,
             vec![
@@ -1456,6 +1462,128 @@ mod tests {
 
         assert_eq!(bin[0], 0);
         assert_eq!(bin[4], 3);
+    }
+
+    #[test]
+    fn given_cross_finger_family_weights_when_cleaning_then_dominant_family_is_kept() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                { "mesh": 0, "skin": 0 },
+                { "name": "mHandIndex1Left" },
+                { "name": "mHandMiddle1Left" }
+            ],
+            "meshes": [
+                {
+                    "primitives": [
+                        {
+                            "attributes": {
+                                "JOINTS_0": 0,
+                                "WEIGHTS_0": 1
+                            }
+                        }
+                    ]
+                }
+            ],
+            "skins": [
+                {
+                    "joints": [1, 2]
+                }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5121, "count": 1, "type": "VEC4" },
+                { "bufferView": 1, "componentType": 5126, "count": 1, "type": "VEC4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 4 },
+                { "buffer": 0, "byteOffset": 4, "byteLength": 16 }
+            ],
+            "buffers": [
+                { "byteLength": 20 }
+            ]
+        });
+
+        let mut bin = vec![0u8; 20];
+        // JOINTS_0: lane0=index, lane1=middle
+        bin[0..4].copy_from_slice(&[0, 1, 0, 0]);
+
+        // WEIGHTS_0: index=0.7, middle=0.3
+        for (lane, value) in [0.7f32, 0.3, 0.0, 0.0].iter().enumerate() {
+            let offset = 4 + lane * 4;
+            bin[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        cleanup_cross_finger_family_weights(&mut json, &mut bin);
+
+        let w0 = f32::from_le_bytes(bin[4..8].try_into().expect("lane0 bytes"));
+        let w1 = f32::from_le_bytes(bin[8..12].try_into().expect("lane1 bytes"));
+        let w2 = f32::from_le_bytes(bin[12..16].try_into().expect("lane2 bytes"));
+        let w3 = f32::from_le_bytes(bin[16..20].try_into().expect("lane3 bytes"));
+
+        assert!((w0 - 1.0).abs() < 1e-6);
+        assert!(w1.abs() < 1e-6);
+        assert!(w2.abs() < 1e-6);
+        assert!(w3.abs() < 1e-6);
+    }
+
+    #[test]
+    fn given_non_thumb_with_thumb_and_wrist_when_cleaning_then_thumb_and_wrist_are_removed() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                { "mesh": 0, "skin": 0 },
+                { "name": "mHandIndex1Left" },
+                { "name": "mHandThumb1Left" },
+                { "name": "mWristLeft" }
+            ],
+            "meshes": [
+                {
+                    "primitives": [
+                        {
+                            "attributes": {
+                                "JOINTS_0": 0,
+                                "WEIGHTS_0": 1
+                            }
+                        }
+                    ]
+                }
+            ],
+            "skins": [
+                {
+                    "joints": [1, 2, 3]
+                }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5121, "count": 1, "type": "VEC4" },
+                { "bufferView": 1, "componentType": 5126, "count": 1, "type": "VEC4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 4 },
+                { "buffer": 0, "byteOffset": 4, "byteLength": 16 }
+            ],
+            "buffers": [
+                { "byteLength": 20 }
+            ]
+        });
+
+        let mut bin = vec![0u8; 20];
+        // JOINTS_0: lane0=index, lane1=thumb, lane2=wrist
+        bin[0..4].copy_from_slice(&[0, 1, 2, 0]);
+
+        // WEIGHTS_0: index=0.3, thumb=0.3, wrist=0.4
+        for (lane, value) in [0.3f32, 0.3, 0.4, 0.0].iter().enumerate() {
+            let offset = 4 + lane * 4;
+            bin[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        cleanup_cross_finger_family_weights(&mut json, &mut bin);
+
+        let w0 = f32::from_le_bytes(bin[4..8].try_into().expect("lane0 bytes"));
+        let w1 = f32::from_le_bytes(bin[8..12].try_into().expect("lane1 bytes"));
+        let w2 = f32::from_le_bytes(bin[12..16].try_into().expect("lane2 bytes"));
+
+        // Thumb and wrist influences should be removed.
+        assert!(w1.abs() < 1e-6);
+        assert!(w2.abs() < 1e-6);
+        assert!((w0 - 1.0).abs() < 1e-6);
     }
 
     #[test]

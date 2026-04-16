@@ -65,6 +65,194 @@ pub(super) fn remap_secondary_chest_head_weights(
     );
 }
 
+/// Reduce residual inward pull in Bento animations by cleaning non-thumb finger
+/// blend weights.
+///
+/// Applied rules per vertex:
+/// 1. If multiple non-thumb families are present (index/middle/ring/pinky),
+///    keep only the dominant non-thumb family.
+/// 2. If any non-thumb family is present, drop thumb influence.
+/// 3. If any non-thumb family is present, cap total wrist influence.
+pub(super) fn cleanup_cross_finger_family_weights(json: &mut Value, bin: &mut [u8]) {
+    let Some(nodes) = json.get("nodes").and_then(Value::as_array) else {
+        return;
+    };
+
+    let skin_count = json
+        .get("skins")
+        .and_then(Value::as_array)
+        .map_or(0, |s| s.len());
+    for skin_index in 0..skin_count {
+        let joints: Vec<usize> = json["skins"][skin_index]["joints"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if joints.is_empty() {
+            continue;
+        }
+
+        let mut slot_family: Vec<Option<u8>> = Vec::with_capacity(joints.len());
+        let mut slot_is_thumb = vec![false; joints.len()];
+        let mut slot_is_wrist = vec![false; joints.len()];
+        for &joint_idx in &joints {
+            let name = nodes
+                .get(joint_idx)
+                .and_then(|node| node.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            let is_thumb = name.contains("HandThumb");
+            let is_wrist = name.contains("Wrist");
+            let family = if name.contains("HandIndex") {
+                Some(0)
+            } else if name.contains("HandMiddle") {
+                Some(1)
+            } else if name.contains("HandRing") {
+                Some(2)
+            } else if name.contains("HandPinky") {
+                Some(3)
+            } else {
+                None
+            };
+            slot_family.push(family);
+            slot_is_thumb[slot_family.len() - 1] = is_thumb;
+            slot_is_wrist[slot_family.len() - 1] = is_wrist;
+        }
+
+        if !slot_family.iter().any(|f| f.is_some()) {
+            continue;
+        }
+
+        let bindings = collect_skin_primitive_bindings(json, skin_index);
+        for binding in bindings {
+            let Some(joints_meta) = accessor_meta(json, binding.joints_accessor) else {
+                continue;
+            };
+            let Some(weights_meta) = accessor_meta(json, binding.weights_accessor) else {
+                continue;
+            };
+            if joints_meta.accessor_type != "VEC4" || weights_meta.accessor_type != "VEC4" {
+                continue;
+            }
+            if !(joints_meta.component_type == 5121 || joints_meta.component_type == 5123) {
+                continue;
+            }
+            if weights_meta.component_type != 5126 {
+                continue;
+            }
+
+            let count = joints_meta.count.min(weights_meta.count);
+            for vertex_index in 0..count {
+                let mut slots = [0u16; 4];
+                let mut weights = [0.0f32; 4];
+                for lane in 0..4 {
+                    slots[lane] =
+                        read_joint_slot(bin, &joints_meta, vertex_index, lane).unwrap_or(0);
+                    weights[lane] =
+                        read_weight_f32(bin, &weights_meta, vertex_index, lane).unwrap_or(0.0);
+                }
+
+                let mut family_acc = [0.0f32; 4];
+                let mut used_family_count = 0usize;
+                for (family_id, acc) in family_acc.iter_mut().enumerate() {
+                    for lane in 0..4 {
+                        if weights[lane] <= 1e-7 {
+                            continue;
+                        }
+                        let slot = slots[lane] as usize;
+                        if slot >= slot_family.len() {
+                            continue;
+                        }
+                        if slot_family[slot] == Some(family_id as u8) {
+                            *acc += weights[lane];
+                        }
+                    }
+                    if *acc > 1e-7 {
+                        used_family_count += 1;
+                    }
+                }
+
+                let has_non_thumb = used_family_count > 0;
+                if !has_non_thumb {
+                    continue;
+                }
+
+                let mut dominant_family = 0usize;
+                let mut dominant_weight = family_acc[0];
+                for (family_id, &w) in family_acc.iter().enumerate().skip(1) {
+                    if w > dominant_weight {
+                        dominant_weight = w;
+                        dominant_family = family_id;
+                    }
+                }
+
+                if used_family_count >= 2 {
+                    for lane in 0..4 {
+                        let slot = slots[lane] as usize;
+                        if slot >= slot_family.len() {
+                            continue;
+                        }
+                        if let Some(family) = slot_family[slot]
+                            && family as usize != dominant_family
+                        {
+                            weights[lane] = 0.0;
+                        }
+                    }
+                }
+
+                // When a non-thumb finger drives this vertex, thumb influence
+                // tends to pull the finger inward toward the palm web.
+                for lane in 0..4 {
+                    let slot = slots[lane] as usize;
+                    if slot >= slot_family.len() {
+                        continue;
+                    }
+                    if slot_is_thumb[slot] {
+                        weights[lane] = 0.0;
+                    }
+                }
+
+                // When a non-thumb finger drives this vertex, wrist influence
+                // can introduce inward drift during open/close hand poses in
+                // SL. Remove wrist lanes for these vertices.
+                let mut non_wrist_sum = 0.0f32;
+                for lane in 0..4 {
+                    let slot = slots[lane] as usize;
+                    if slot >= slot_is_wrist.len() {
+                        continue;
+                    }
+                    if slot_is_wrist[slot] {
+                        weights[lane] = 0.0;
+                    } else {
+                        non_wrist_sum += weights[lane];
+                    }
+                }
+
+                if non_wrist_sum <= 1e-7 {
+                    // Degenerate case: only wrist remains. Preserve one lane
+                    // as-is and zero others to keep the vertex valid.
+                    for lane in 0..4 {
+                        weights[lane] = if lane == 0 { 1.0 } else { 0.0 };
+                    }
+                }
+
+                let weight_sum: f32 = weights.iter().sum();
+                if weight_sum > 1e-7 {
+                    for lane in 0..4 {
+                        weights[lane] /= weight_sum;
+                        let _ =
+                            write_weight_f32(bin, &weights_meta, vertex_index, lane, weights[lane]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn remap_selected_unmapped_bone_weights<F>(
     json: &mut Value,
     bin: &mut [u8],
