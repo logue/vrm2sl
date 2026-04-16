@@ -21,27 +21,9 @@ fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
         return true;
     }
 
-    // Thumbs have complex authored rotations that encode their natural
-    // orientation; preserve them.  The other four finger chains have
-    // near-identity proximal rotations in VRM but small residual Y/Z
-    // values that accumulate into a visible lean in SL, so we normalise
-    // them to identity while keeping their translations intact.
-    const THUMB_BASES: [&str; 2] = ["leftThumb", "rightThumb"];
-    const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
-
-    THUMB_BASES.iter().any(|base| {
-        vrm_bone_name.starts_with(base)
-            && FINGER_SEGMENTS
-                .iter()
-                .any(|segment| vrm_bone_name.ends_with(segment))
-    })
-}
-
-fn should_preserve_local_translation(vrm_bone_name: &str) -> bool {
-    if matches!(vrm_bone_name, "leftHand" | "rightHand") {
-        return true;
-    }
-
+    // Finger chains need their authored local axes preserved so SL Bento
+    // curl animations bend them in the intended plane. Normalizing non-thumb
+    // fingers to identity makes them curl inward toward the middle finger.
     const FINGER_BASES: [&str; 10] = [
         "leftThumb",
         "leftIndex",
@@ -295,13 +277,6 @@ pub(super) fn normalize_sl_bone_rotations(
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
-    let preserve_translation_node_indices: HashSet<usize> = BONE_MAP
-        .iter()
-        .chain(BENTO_BONE_MAP.iter())
-        .filter(|(vrm_name, _)| should_preserve_local_translation(vrm_name))
-        .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
-        .collect();
-
     let node_locals: Vec<Matrix4<f32>> = json["nodes"]
         .as_array()
         .map(|nodes| nodes.iter().map(node_to_local_matrix).collect())
@@ -379,7 +354,9 @@ pub(super) fn normalize_sl_bone_rotations(
         };
 
         if !mapped_sl_node_indices.contains(&node_idx) {
-            // Non-mapped nodes keep their original local transform.
+            // Non-mapped nodes like upperChest and spring-bone helpers keep
+            // their authored local transforms. Zeroing their rotations changes
+            // the rest pose and visibly collapses chest and hair deformations.
             effective_world[node_idx] = parent_world * original_locals[node_idx];
             continue;
         }
@@ -403,21 +380,18 @@ pub(super) fn normalize_sl_bone_rotations(
         let local_t = parent_rot.inverse() * world_offset;
 
         let will_normalize = rotation_normalize_node_indices.contains(&node_idx);
-        let preserve_local_translation = preserve_translation_node_indices.contains(&node_idx);
 
         if let Some(obj) = json["nodes"][node_idx].as_object_mut() {
-            if !preserve_local_translation {
-                obj.remove("matrix");
-                obj.insert(
-                    "translation".to_string(),
-                    serde_json::json!([local_t.x, local_t.y, local_t.z]),
-                );
-            }
+            // Always recompute local translation from the preserved world
+            // position so that orient_avatar_for_sl's Ry(90°) pass applies
+            // exactly once.
+            obj.remove("matrix");
+            obj.insert(
+                "translation".to_string(),
+                serde_json::json!([local_t.x, local_t.y, local_t.z]),
+            );
 
             // Force identity scale for ALL mapped bones.
-            // Even tiny residual non-unit scales on preserved finger bones can
-            // inject lateral drift/twisting once IBMs are regenerated and SL
-            // animations are applied.
             obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
 
             if will_normalize {

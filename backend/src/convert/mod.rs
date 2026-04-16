@@ -42,7 +42,7 @@ use skeleton::{
 };
 use skinning::{
     collapse_secondary_head_skins_to_primary, merge_head_only_skins_into_primary,
-    soften_face_eye_influences,
+    remap_secondary_chest_head_weights, soften_face_eye_influences,
 };
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
@@ -368,11 +368,10 @@ fn transform_and_write_glb(
     // during Bento animations on certain VRoid sources, so keep it disabled
     // for now while preserving joint/IBM regeneration below.
     let _ = pre_normalization_worlds;
-    // NOTE:
-    // Hand deformation debugging: keep original joint/weight distribution to
-    // avoid aggressive ancestor remapping around fingers.
-    // remap_unmapped_bone_weights(&mut json, &mut bin, humanoid_bone_nodes);
-    // optimize_skinning_weights_and_joints(&mut json, &mut bin)?;
+    // Remap chest/head-adjacent secondary helpers that SL ignores in preview
+    // so upperChest/bust chains do not collapse the torso before upload.
+    // Hand-side helpers remain untouched to avoid reintroducing finger issues.
+    remap_secondary_chest_head_weights(&mut json, &mut bin, humanoid_bone_nodes);
     soften_face_eye_influences(&mut json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Reassign Face and Hair mesh nodes to the primary (Body) skin so that SL
@@ -815,7 +814,9 @@ mod tests {
         promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, rename_bones,
         validate_bone_conversion_preconditions,
     };
-    use super::skinning::optimize_skinning_weights_and_joints;
+    use super::skinning::{
+        optimize_skinning_weights_and_joints, remap_secondary_chest_head_weights,
+    };
     use super::validation::{
         estimate_texture_fee, extract_humanoid_bone_nodes, projected_texture_size,
         validate_hierarchy,
@@ -1096,8 +1097,8 @@ mod tests {
             vec![
                 Value::from(0.0),
                 Value::from(0.0),
-                Value::from(0.0),
-                Value::from(1.0)
+                Value::from(0.2),
+                Value::from(0.98)
             ]
         );
 
@@ -1113,6 +1114,51 @@ mod tests {
                 Value::from(0.12),
                 Value::from(-0.04),
                 Value::from(0.99)
+            ]
+        );
+    }
+
+    #[test]
+    fn given_upper_chest_helper_when_normalizing_then_authored_rotation_is_preserved() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mChest",
+                    "translation": [0.0, 1.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "children": [1]
+                },
+                {
+                    "name": "upperChest",
+                    "translation": [0.0, 0.2, 0.0],
+                    "rotation": [0.0, 0.18, 0.0, 0.98],
+                    "children": [2]
+                },
+                {
+                    "name": "mNeck",
+                    "translation": [0.0, 0.2, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0]
+                }
+            ]
+        });
+
+        let humanoid = HashMap::from([("chest".to_string(), 0usize), ("neck".to_string(), 2usize)]);
+
+        normalize_sl_bone_rotations(&mut json, &humanoid);
+
+        let upper_chest_rotation = json["nodes"][1]
+            .get("rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(
+            upper_chest_rotation,
+            vec![
+                Value::from(0.0),
+                Value::from(0.18),
+                Value::from(0.0),
+                Value::from(0.98)
             ]
         );
     }
@@ -1347,6 +1393,69 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(idx2_children.contains(&Value::from(3u64)));
+    }
+
+    #[test]
+    fn given_upper_chest_weights_when_remapping_then_they_move_to_chest_only() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                { "mesh": 0, "skin": 0 },
+                { "name": "mChest", "children": [2] },
+                { "name": "J_Bip_C_UpperChest" },
+                { "name": "mWristLeft", "children": [4] },
+                { "name": "HandHelper" }
+            ],
+            "meshes": [
+                {
+                    "primitives": [
+                        {
+                            "attributes": {
+                                "JOINTS_0": 0,
+                                "WEIGHTS_0": 1
+                            }
+                        }
+                    ]
+                }
+            ],
+            "skins": [
+                {
+                    "joints": [1, 2, 3, 4]
+                }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5121, "count": 2, "type": "VEC4" },
+                { "bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": 8, "byteLength": 32 }
+            ],
+            "buffers": [
+                { "byteLength": 40 }
+            ]
+        });
+
+        let mut bin = vec![0u8; 40];
+        bin[0..8].copy_from_slice(&[
+            1, 0, 0, 0, // vertex 0 -> upperChest slot
+            3, 0, 0, 0, // vertex 1 -> hand helper slot
+        ]);
+
+        let weights = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        for (index, value) in weights.iter().enumerate() {
+            let offset = 8 + index * 4;
+            bin[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let humanoid = HashMap::from([
+            ("chest".to_string(), 1usize),
+            ("leftHand".to_string(), 3usize),
+        ]);
+
+        remap_secondary_chest_head_weights(&mut json, &mut bin, &humanoid);
+
+        assert_eq!(bin[0], 0);
+        assert_eq!(bin[4], 3);
     }
 
     #[test]

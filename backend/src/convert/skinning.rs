@@ -25,22 +25,72 @@ pub(super) fn remap_unmapped_bone_weights(
     bin: &mut [u8],
     humanoid_bone_nodes: &HashMap<String, usize>,
 ) {
+    remap_selected_unmapped_bone_weights(json, bin, humanoid_bone_nodes, |_, _, _| true);
+}
+
+/// Remap chest/head-adjacent secondary helper bones to their nearest mapped
+/// SL ancestor while leaving hand-side helper chains untouched.
+///
+/// This targets helper chains like `upperChest`, bust, hood, and head-adjacent
+/// secondary bones that SL ignores during upload preview, which can otherwise
+/// collapse the chest or upper torso before import.
+pub(super) fn remap_secondary_chest_head_weights(
+    json: &mut Value,
+    bin: &mut [u8],
+    humanoid_bone_nodes: &HashMap<String, usize>,
+) {
+    let allowed_ancestors: HashSet<usize> = ["chest", "neck", "head"]
+        .iter()
+        .filter_map(|bone| humanoid_bone_nodes.get(*bone).copied())
+        .collect();
+
+    remap_selected_unmapped_bone_weights(
+        json,
+        bin,
+        humanoid_bone_nodes,
+        |nodes, node_idx, ancestor_idx| {
+            if !allowed_ancestors.contains(&ancestor_idx) {
+                return false;
+            }
+
+            let node_name = nodes
+                .get(node_idx)
+                .and_then(|node| node.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            !node_name.contains("hand") && !node_name.contains("finger")
+        },
+    );
+}
+
+fn remap_selected_unmapped_bone_weights<F>(
+    json: &mut Value,
+    bin: &mut [u8],
+    humanoid_bone_nodes: &HashMap<String, usize>,
+    should_remap_node: F,
+) where
+    F: Fn(&[Value], usize, usize) -> bool,
+{
     let sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
-    let node_count = json["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let Some(nodes) = json.get("nodes").and_then(Value::as_array) else {
+        return;
+    };
+
+    let node_count = nodes.len();
     let mut parent_of = vec![None::<usize>; node_count];
-    if let Some(nodes) = json["nodes"].as_array() {
-        for (parent_idx, node) in nodes.iter().enumerate() {
-            if let Some(children) = node["children"].as_array() {
-                for child in children {
-                    if let Some(child_idx) = child.as_u64().map(|v| v as usize) {
-                        if child_idx < parent_of.len() {
-                            parent_of[child_idx] = Some(parent_idx);
-                        }
+    for (parent_idx, node) in nodes.iter().enumerate() {
+        if let Some(children) = node["children"].as_array() {
+            for child in children {
+                if let Some(child_idx) = child.as_u64().map(|v| v as usize) {
+                    if child_idx < parent_of.len() {
+                        parent_of[child_idx] = Some(parent_idx);
                     }
                 }
             }
@@ -81,6 +131,9 @@ pub(super) fn remap_unmapped_bone_weights(
                 continue;
             }
             if let Some(ancestor_node_idx) = find_sl_ancestor(node_idx) {
+                if !should_remap_node(nodes, node_idx, ancestor_node_idx) {
+                    continue;
+                }
                 if let Some(ancestor_slot) = joints.iter().position(|&j| j == ancestor_node_idx) {
                     slot_remap[slot] = ancestor_slot;
                     any_remap = true;
