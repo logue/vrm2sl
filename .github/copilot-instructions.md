@@ -193,3 +193,11 @@ cargo build --release
 - **Version management**: Version is in root `.env` file, synced to `Cargo.toml`, `package.json`, and `tauri.conf.json`
 - **Package managers**: Build scripts generate `.nuspec` (Chocolatey) and `.rb` (Homebrew) files dynamically from `.env` configuration
 - **Template system**: All app-specific values are in `.env` - edit this file when creating a new project from this template
+
+## Bone Transformation Debugging Rules
+
+- **Constraint**: The finger bones are clustering at the middle finger (clumping bug).
+- **Hypothesis Testing**:
+  1. AI 1: Check the rest pose difference between VRM (T-pose) and SL (A-pose/Spread).
+  2. AI 2: Validate the bone roll values and axis orientation (X-axis vs Y-axis as primary).
+- **Observation**: Do not settle for "roughly correct". Print out the bone head/tail coordinates before and after transformation for manual verification.

@@ -128,13 +128,8 @@ pub(super) fn write_conversion_diagnostic_log(
             skin_index: node.get("skin").and_then(Value::as_u64).map(|v| v as usize),
         })
         .collect::<Vec<_>>();
-    let finger_representative_vertices = collect_finger_representative_vertices(
-        &json,
-        &bin,
-        &nodes,
-        &mesh_nodes_with_skin,
-        &worlds,
-    );
+    let finger_representative_vertices =
+        collect_finger_representative_vertices(&json, &bin, &nodes, &mesh_nodes_with_skin, &worlds);
 
     let mut skins_out = Vec::<SkinDiagnostic>::new();
     if let Some(skins) = json.get("skins").and_then(Value::as_array) {
@@ -352,8 +347,8 @@ fn collect_finger_representative_vertices(
             else {
                 continue;
             };
-            let Some(joints_0_meta) = accessor_meta(json, joints_0_accessor)
-                .filter(|meta| meta.accessor_type == "VEC4")
+            let Some(joints_0_meta) =
+                accessor_meta(json, joints_0_accessor).filter(|meta| meta.accessor_type == "VEC4")
             else {
                 continue;
             };
@@ -375,7 +370,10 @@ fn collect_finger_representative_vertices(
                 .and_then(|index| accessor_meta(json, index))
                 .filter(|meta| meta.component_type == 5126 && meta.accessor_type == "VEC4");
 
-            let vertex_count = position_meta.count.min(joints_0_meta.count).min(weights_0_meta.count);
+            let vertex_count = position_meta
+                .count
+                .min(joints_0_meta.count)
+                .min(weights_0_meta.count);
             for vertex_index in 0..vertex_count {
                 let Some(local_position) = read_vec3_f32(bin, &position_meta, vertex_index) else {
                     continue;
