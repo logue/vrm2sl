@@ -194,10 +194,12 @@ cargo build --release
 - **Package managers**: Build scripts generate `.nuspec` (Chocolatey) and `.rb` (Homebrew) files dynamically from `.env` configuration
 - **Template system**: All app-specific values are in `.env` - edit this file when creating a new project from this template
 
-## Bone Transformation Debugging Rules
+## Bone Transformation Debugging Rules (Urgent Fix: Finger Clumping on Curl)
 
-- **Constraint**: The finger bones are clustering at the middle finger (clumping bug).
-- **Hypothesis Testing**:
-  1. AI 1: Check the rest pose difference between VRM (T-pose) and SL (A-pose/Spread).
-  2. AI 2: Validate the bone roll values and axis orientation (X-axis vs Y-axis as primary).
-- **Observation**: Do not settle for "roughly correct". Print out the bone head/tail coordinates before and after transformation for manual verification.
+- **Symptom**: Fingers appear normal when spread. They converge into a single bundle at the center (Middle finger root) ONLY when curl/bend animation is applied.
+- **Root Cause Hypothesis**: Mistranslation of the 'Finger Curl Axis'. VRM X-axis rotation (Curl) is being incorrectly mapped to an axis in SL that causes lateral movement toward the middle finger.
+- **Strict Validation Required for AI-Generated Code**:
+  1. **Log All Rotations**: The conversion code must print the LOCAL rotation axes (Euler) of at least the Index and Pinky bones _before_ and _after_ the SL transformation.
+  2. **Audit Output Axis**: AI must provide a script or code comment proving that a pure X-axis rotation in the input VRM file (a standard curl) results in a rotation that moves the bone _only_ towards the palm, not sideways. If side-to-side movement occurs, the conversion logic is flawed.
+  3. **Check Parent Influence**: AI must audit the final code to ensure that parent bone rotations (like Wrist) are not being double-applied to child finger local axes.
+- **Prohibition**: Do not accept any "roughly corrected" heuristic code. The fix must come from correct axis re-mapping.

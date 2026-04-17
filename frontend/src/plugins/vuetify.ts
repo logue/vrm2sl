@@ -45,6 +45,7 @@ let vuetifyConfig: VuetifyOptions = {
   // Internationalization (i18n)
   // https://vuetifyjs.com/en/features/internationalization/#internationalization-i18n
   locale: {
+    // @ts-ignore
     adapter: createVueI18nAdapter({ i18n, useI18n })
   },
   // Theme

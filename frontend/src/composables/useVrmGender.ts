@@ -1,6 +1,6 @@
 import { readFile } from '@tauri-apps/plugin-fs';
 
-export type MotionMode = 'idle' | 'walk';
+export type MotionMode = 'idle' | 'walk' | 'custom';
 export type AvatarGender = 'female' | 'male' | 'unknown';
 
 /**
@@ -85,7 +85,15 @@ export async function detectGenderFromVrm(path: string): Promise<AvatarGender> {
 /**
  * Resolve the BVH motion file path for a given mode and gender combination.
  */
-export function resolveMotionPath(mode: MotionMode, gender: AvatarGender): string {
+export function resolveMotionPath(
+  mode: MotionMode,
+  gender: AvatarGender,
+  customMotionPath?: string
+): string {
+  if (mode === 'custom') {
+    return customMotionPath ?? '/animations/avatar_stand_1.bvh';
+  }
+
   if (mode === 'walk') {
     if (gender === 'female') {
       return '/animations/avatar_female_walk.bvh';

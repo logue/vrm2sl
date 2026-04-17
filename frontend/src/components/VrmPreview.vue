@@ -9,6 +9,14 @@ import type { ConvertOptions } from '@/interfaces';
 import { useAvatarAnimation } from '@/composables/useAvatarAnimation';
 import { detectGenderFromVrm, resolveMotionPath } from '@/composables/useVrmGender';
 import { useVrmPreviewScene } from '@/composables/useVrmPreviewScene';
+import {
+  playbackIcon,
+  formatPreviewMotionTitle,
+  PREVIEW_MOTION_CATEGORY_OPTIONS,
+  type PreviewMotionPlayback,
+  type PreviewMotionCategory,
+  PREVIEW_CUSTOM_MOTION_OPTIONS
+} from '@/constants/previewAnimations';
 
 const props = defineProps<{
   filePath: string;
@@ -18,25 +26,77 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const canvasHost = shallowRef<HTMLDivElement | null>(null);
-const animationEnabled = ref(false);
-
-type MotionMode = 'idle' | 'walk';
+const animationEnabled = ref(true);
 type AvatarGender = 'female' | 'male' | 'unknown';
+type MotionSelectionCategory = PreviewMotionCategory | 'system';
+type MotionItem = {
+  title: string;
+  value: string;
+  playback: PreviewMotionPlayback;
+};
 
-const selectedMotionMode = ref<MotionMode>('idle');
+const selectedMotionMode = ref<'idle' | 'walk' | 'custom'>('idle');
+const selectedMotionCategory = ref<MotionSelectionCategory>('system');
+const selectedMotionValue = ref<string>('idle');
 const avatarGender = ref<AvatarGender>('unknown');
 const currentMotionPath = ref('/animations/avatar_stand_1.bvh');
 // shallowRef を使用して Three.js オブジェクトが Vue のディープリアクティブ Proxy でラップされるのを防ぐ。
 // ref() は内部プロパティを Proxy 化するため scene.add() や行列演算が壊れる。
 const modelRoot = shallowRef<THREE.Object3D | null>(null);
 
-const MOTION_MODE_ITEMS = computed(() => [
-  { title: t('motion_idle'), value: 'idle' as MotionMode },
-  { title: t('motion_walk'), value: 'walk' as MotionMode }
+const SYSTEM_MOTION_ITEMS = computed<MotionItem[]>(() => [
+  { title: t('motion_idle'), value: 'idle', playback: 'loop' },
+  { title: t('motion_walk'), value: 'walk', playback: 'loop' }
 ]);
 
+const FILTERED_MOTION_ITEMS = computed(() => {
+  if (selectedMotionCategory.value === 'system') {
+    return SYSTEM_MOTION_ITEMS.value;
+  }
+
+  const items = PREVIEW_CUSTOM_MOTION_OPTIONS.filter(
+    option => option.category === selectedMotionCategory.value
+  );
+  return items.length > 0 ? items : PREVIEW_CUSTOM_MOTION_OPTIONS;
+});
+
+const selectedMotionPlayback = computed<PreviewMotionPlayback>(() => {
+  const selected = FILTERED_MOTION_ITEMS.value.find(
+    item => item.value === selectedMotionValue.value
+  );
+  return selected?.playback ?? 'loop';
+});
+
+const selectedMotionPlaybackIcon = computed(() => playbackIcon(selectedMotionPlayback.value));
+
+const currentMotionName = computed(() => currentMotionPath.value.split('/').pop() ?? '');
+const currentMotionLabel = computed(() => {
+  if (selectedMotionMode.value === 'idle') {
+    return t('motion_idle');
+  }
+  if (selectedMotionMode.value === 'walk') {
+    return t('motion_walk');
+  }
+  return formatPreviewMotionTitle(currentMotionPath.value);
+});
+const motionSummaryText = computed(
+  () =>
+    `Gender: ${avatarGender.value} / Category: ${selectedMotionCategory.value} / Selected: ${currentMotionLabel.value} / Playback: ${selectedMotionPlayback.value} / File: ${currentMotionName.value}`
+);
+
 const applyMotionSelection = () => {
-  currentMotionPath.value = resolveMotionPath(selectedMotionMode.value, avatarGender.value);
+  if (selectedMotionValue.value === 'idle' || selectedMotionValue.value === 'walk') {
+    selectedMotionMode.value = selectedMotionValue.value;
+    currentMotionPath.value = resolveMotionPath(selectedMotionMode.value, avatarGender.value);
+    return;
+  }
+
+  selectedMotionMode.value = 'custom';
+  currentMotionPath.value = resolveMotionPath(
+    'custom',
+    avatarGender.value,
+    selectedMotionValue.value
+  );
 };
 
 const { animationStatus, applyOrLoadAnimation, stopIdleAnimation, tickMixer, disposeMixer } =
@@ -48,20 +108,27 @@ const { animationStatus, applyOrLoadAnimation, stopIdleAnimation, tickMixer, dis
     t
   });
 
-const { loading, errorMessage, scheduleReload, loadPreviewModel, initScene, disposeScene } =
-  useVrmPreviewScene({
-    canvasHost,
-    modelRoot,
-    animationEnabled,
-    onBeforeLoad: async (path: string) => {
-      avatarGender.value = await detectGenderFromVrm(path);
-      applyMotionSelection();
-    },
-    applyOrLoadAnimation,
-    stopIdleAnimation,
-    disposeMixer,
-    tickMixer
-  });
+const {
+  loading,
+  errorMessage,
+  scheduleReload,
+  loadPreviewModel,
+  initScene,
+  disposeScene,
+  resetCamera
+} = useVrmPreviewScene({
+  canvasHost,
+  modelRoot,
+  animationEnabled,
+  onBeforeLoad: async (path: string) => {
+    avatarGender.value = await detectGenderFromVrm(path);
+    applyMotionSelection();
+  },
+  applyOrLoadAnimation,
+  stopIdleAnimation,
+  disposeMixer,
+  tickMixer
+});
 
 onMounted(() => {
   if (!canvasHost.value) {
@@ -102,12 +169,28 @@ watch(
 );
 
 watch(
-  () => selectedMotionMode.value,
+  () => selectedMotionValue.value,
   () => {
     applyMotionSelection();
     if (animationEnabled.value) {
       void applyOrLoadAnimation();
     }
+  }
+);
+
+watch(
+  () => selectedMotionCategory.value,
+  () => {
+    const availableValues = FILTERED_MOTION_ITEMS.value.map(item => item.value);
+    if (availableValues.includes(selectedMotionValue.value)) {
+      return;
+    }
+
+    const [firstValue] = availableValues;
+    if (!firstValue) {
+      return;
+    }
+    selectedMotionValue.value = firstValue;
   }
 );
 
@@ -122,30 +205,54 @@ onBeforeUnmount(() => {
       <div ref="canvasHost" class="preview-host" />
       <div class="d-flex flex-wrap ga-3 align-center mt-3">
         <v-select
-          v-model="selectedMotionMode"
-          :items="MOTION_MODE_ITEMS"
+          v-model="selectedMotionCategory"
+          :items="PREVIEW_MOTION_CATEGORY_OPTIONS"
           item-title="title"
           item-value="value"
+          :clearable="false"
+          density="compact"
+          hide-details
+          label="Category"
+          style="max-width: 220px"
+        />
+        <v-select
+          v-model="selectedMotionValue"
+          :items="FILTERED_MOTION_ITEMS"
+          item-title="title"
+          item-value="value"
+          :clearable="false"
           density="compact"
           hide-details
           :label="t('motion_label')"
-          style="max-width: 180px"
-        />
+          style="max-width: 340px"
+        >
+          <template #item="{ props: itemProps, item }">
+            <v-list-item v-bind="itemProps" :prepend-icon="playbackIcon(item.playback)" />
+          </template>
+          <template #selection>
+            <v-icon :icon="selectedMotionPlaybackIcon" class="mr-1" size="small" />
+            <span>{{ currentMotionLabel }}</span>
+          </template>
+        </v-select>
         <v-switch
           v-model="animationEnabled"
           color="primary"
           density="compact"
           hide-details
-          :label="t('motion_play_label', { file: currentMotionPath.split('/').pop() })"
+          :label="t('motion_play_label', { file: currentMotionName })"
         />
+        <v-btn
+          variant="tonal"
+          density="comfortable"
+          color="secondary"
+          prepend-icon="mdi-camera-retake-outline"
+          @click="resetCamera"
+        >
+          {{ t('reset_camera') }}
+        </v-btn>
       </div>
       <div class="text-caption text-medium-emphasis mt-1">
-        {{
-          t('gender_motion_info', {
-            gender: avatarGender,
-            file: currentMotionPath.split('/').pop()
-          })
-        }}
+        {{ motionSummaryText }}
       </div>
       <v-alert v-if="loading" type="info" class="mt-2" variant="tonal">{{ t('loading') }}</v-alert>
       <v-alert v-else-if="errorMessage" type="error" class="mt-2" variant="tonal">
@@ -166,6 +273,7 @@ en:
   title: VRM Preview
   motion_label: Motion
   motion_play_label: 'Play motion ({file})'
+  reset_camera: Reset Camera
   gender_motion_info: 'Gender: {gender} / Auto-selected: {file}'
   loading: Loading...
   no_file_selected: Select a VRM file to display the preview here.
@@ -184,6 +292,7 @@ fr:
   title: Prévisualisation VRM
   motion_label: Mouvement
   motion_play_label: 'Lire le mouvement ({file})'
+  reset_camera: Réinitialiser la caméra
   gender_motion_info: 'Genre: {gender} / Sélection auto: {file}'
   loading: Chargement...
   no_file_selected: Sélectionnez un fichier VRM pour afficher la prévisualisation ici.
@@ -202,6 +311,7 @@ ja:
   title: VRMプレビュー
   motion_label: モーション
   motion_play_label: 'モーション再生 ({file})'
+  reset_camera: カメラリセット
   gender_motion_info: '性別判定: {gender} / 自動選択: {file}'
   loading: 読み込み中...
   no_file_selected: VRMファイルを選択するとここに表示されます。
@@ -220,6 +330,7 @@ ko:
   title: VRM 미리보기
   motion_label: 모션
   motion_play_label: '모션 재생 ({file})'
+  reset_camera: 카메라 리셋
   gender_motion_info: '성별 판정: {gender} / 자동 선택: {file}'
   loading: 불러오는 중...
   no_file_selected: VRM 파일을 선택하면 여기에 표시됩니다.
@@ -238,6 +349,7 @@ zhHant:
   title: VRM 預覽
   motion_label: 動作
   motion_play_label: '播放動作 ({file})'
+  reset_camera: 重設鏡頭
   gender_motion_info: '性別判定: {gender} / 自動選擇: {file}'
   loading: 載入中...
   no_file_selected: 選擇 VRM 檔案後將在此顯示預覽。
@@ -256,6 +368,7 @@ zhHans:
   title: VRM 预览
   motion_label: 动作
   motion_play_label: '播放动作 ({file})'
+  reset_camera: 重置镜头
   gender_motion_info: '性别判定: {gender} / 自动选择: {file}'
   loading: 加载中...
   no_file_selected: 选择 VRM 文件后将在此处显示预览。

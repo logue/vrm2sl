@@ -8,6 +8,8 @@ import { ref, type Ref } from 'vue';
 import * as THREE from 'three';
 import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 
+import { formatPreviewMotionTitle } from '@/constants/previewAnimations';
+
 import { buildRetargetedClip, buildProceduralIdleClip } from './useBvhRetargeting';
 
 import type { MotionMode } from './useVrmGender';
@@ -86,6 +88,7 @@ export function useAvatarAnimation({
 
     disposeMixer();
     mixer = new THREE.AnimationMixer(modelRoot.value);
+    const activeMixer = mixer;
 
     let appliedMeshCount = 0;
     let appliedTrackCount = 0;
@@ -111,8 +114,7 @@ export function useAvatarAnimation({
         for (const track of clip.tracks) {
           maxKeyframes = Math.max(maxKeyframes, track.times.length);
         }
-        // mixer is guaranteed non-null here (set above before the loop).
-        const action = mixer.clipAction(clip, skinnedMesh);
+        const action = activeMixer.clipAction(clip, skinnedMesh);
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.clampWhenFinished = false;
         action.enabled = true;
@@ -134,7 +136,12 @@ export function useAvatarAnimation({
       return;
     }
 
-    const modeLabel = selectedMotionMode.value === 'walk' ? t('motion_walk') : t('motion_idle');
+    let modeLabel = formatPreviewMotionTitle(currentMotionPath.value);
+    if (selectedMotionMode.value === 'walk') {
+      modeLabel = t('motion_walk');
+    } else if (selectedMotionMode.value === 'idle') {
+      modeLabel = t('motion_idle');
+    }
     const synthSuffix = proceduralApplied ? ' + synth idle' : '';
 
     if (maxKeyframes <= 1) {

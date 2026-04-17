@@ -336,6 +336,11 @@ export function useVrmPreviewScene({
     lastFrameTime = -1;
   };
 
+  const resetCamera = () => {
+    controls?.reset();
+    controls?.update();
+  };
+
   return {
     loading,
     errorMessage,
@@ -343,6 +348,7 @@ export function useVrmPreviewScene({
     loadPreviewModel,
     scheduleReload,
     initScene,
-    disposeScene
+    disposeScene,
+    resetCamera
   };
 }
