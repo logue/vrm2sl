@@ -48,7 +48,7 @@ use skinning::{
 use validation::{
     collect_mapped_bones, collect_missing_required_bones, collect_node_names,
     collect_parent_index_map, estimate_texture_fee, extract_author, extract_humanoid_bone_nodes,
-    extract_model_name, remove_unsupported_features, remove_vrm_extensions_and_extras,
+    extract_model_name, is_vrm0, remove_unsupported_features, remove_vrm_extensions_and_extras,
     validate_hierarchy, validate_vroid_model,
 };
 
@@ -144,6 +144,14 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
             severity: Severity::Error,
             code: "UNSUPPORTED_SOURCE".to_string(),
             message: err.to_string(),
+        });
+    }
+
+    if is_vrm0(&input_json) {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            code: "UNSUPPORTED_VRM_VERSION".to_string(),
+            message: "[ERROR] VRM 0.x files are not supported. Please use VRM 1.0.".to_string(),
         });
     }
 

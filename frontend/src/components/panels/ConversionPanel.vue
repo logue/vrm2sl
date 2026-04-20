@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { AnalysisReport, ConversionReport, ConvertOptions } from '@/interfaces';
 
 import VrmPreview from '@/components/VrmPreview.vue';
+import MessageDialog from '@/components/modals/MessageDialog.vue';
 import { useFileSystem } from '@/composables/useFileSystem';
 import { useNotification } from '@/composables/useNotification';
 import { ValidationSeverity } from '@/types';
@@ -43,6 +44,7 @@ const fs = useFileSystem();
 
 const appVersion = ref('');
 const convertResultPath = ref('');
+const showVersionErrorDialog = ref(false);
 
 const options = ref<ConvertOptions>({
   target_height_cm: configStore.targetHeightCm,
@@ -116,7 +118,11 @@ const runAnalyze = async () => {
       }
     });
     emit('update:analysis', result);
-    notification.success(t('success_analyze'));
+    if (result.issues.some(issue => issue.code === 'UNSUPPORTED_VRM_VERSION')) {
+      showVersionErrorDialog.value = true;
+    } else {
+      notification.success(t('success_analyze'));
+    }
   } catch (error) {
     notification.error(String(error));
   } finally {
@@ -159,6 +165,11 @@ onMounted(async () => {
 </script>
 
 <template>
+  <message-dialog
+    v-model="showVersionErrorDialog"
+    :title="t('vrm0_error_title')"
+    :message="t('vrm0_error_message')"
+  />
   <v-row>
     <v-col cols="12" lg="6">
       <v-card
@@ -288,6 +299,8 @@ en:
   error_no_paths: Please set the input VRM and output destination.
   success_analyze: Analysis complete.
   success_convert: 'Conversion complete (scale={scale})'
+  vrm0_error_title: Unsupported VRM Version
+  vrm0_error_message: Only VRM 1.0 is supported. Please convert your file to VRM 1.0 before importing.
 fr:
   title: Conversion VRM -> Second Life glTF
   backend_version: 'Version du backend: {version}'
@@ -310,6 +323,8 @@ fr:
   error_no_paths: "Veuillez définir le VRM d'entrée et la destination de sortie."
   success_analyze: Analyse terminée.
   success_convert: 'Conversion terminée (scale={scale})'
+  vrm0_error_title: Version VRM non prise en charge
+  vrm0_error_message: "Seule la version VRM 1.0 est prise en charge. Veuillez convertir votre fichier en VRM 1.0 avant de l'importer."
 ja:
   title: VRM → Second Life glTF 変換
   backend_version: 'バックエンドバージョン: {version}'
@@ -332,6 +347,8 @@ ja:
   error_no_paths: 入力VRMと出力先を設定してください。
   success_analyze: 解析が完了しました。
   success_convert: '変換完了 (scale={scale})'
+  vrm0_error_title: サポートされていないVRMバージョン
+  vrm0_error_message: VRM 1.0のみ使用可能です。VRM 1.0に変換してからインポートしてください。
 ko:
   title: VRM → Second Life glTF 변환
   backend_version: '백엔드 버전: {version}'
@@ -354,6 +371,8 @@ ko:
   error_no_paths: 입력 VRM과 출력 대상을 설정해 주세요.
   success_analyze: 분석이 완료되었습니다.
   success_convert: '변환 완료 (scale={scale})'
+  vrm0_error_title: 지원되지 않는 VRM 버전
+  vrm0_error_message: VRM 1.0만 사용 가능합니다. 파일을 VRM 1.0으로 변환한 후 가져오세요.
 zhHant:
   title: VRM → Second Life glTF 轉換
   backend_version: '後端版本: {version}'
@@ -376,6 +395,8 @@ zhHant:
   error_no_paths: 請設定輸入 VRM 和輸出目的地。
   success_analyze: 分析完成。
   success_convert: '轉換完成 (scale={scale})'
+  vrm0_error_title: 不支援的 VRM 版本
+  vrm0_error_message: 僅支援 VRM 1.0。請先將您的檔案轉換為 VRM 1.0 再匯入。
 zhHans:
   title: VRM → Second Life glTF 转换
   backend_version: '后端版本: {version}'
@@ -398,6 +419,8 @@ zhHans:
   error_no_paths: 请设置输入 VRM 和输出目标。
   success_analyze: 分析完成。
   success_convert: '转换完成 (scale={scale})'
+  vrm0_error_title: 不支持的 VRM 版本
+  vrm0_error_message: 仅支持 VRM 1.0。请先将您的文件转换为 VRM 1.0 再导入。
 </i18n>
 
 <style scoped>

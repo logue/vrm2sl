@@ -56,6 +56,19 @@ pub(super) fn validate_vroid_model(json: &Value) -> Result<()> {
     bail!("[ERROR] Only standard VRoid Studio VRM files are supported")
 }
 
+/// Detect whether the file is a VRM 0.x model (has `VRM` extension but not `VRMC_vrm`).
+/// VRM 0.x is not supported; only VRM 1.0 files are accepted.
+pub(super) fn is_vrm0(json: &Value) -> bool {
+    let extensions = json.get("extensions").and_then(Value::as_object);
+    let has_vrmc_vrm = extensions
+        .map(|ext| ext.contains_key("VRMC_vrm"))
+        .unwrap_or(false);
+    let has_vrm = extensions
+        .map(|ext| ext.contains_key("VRM"))
+        .unwrap_or(false);
+    has_vrm && !has_vrmc_vrm
+}
+
 /// Collect all named node identifiers from the source document.
 pub(super) fn collect_node_names(document: &Document) -> HashSet<String> {
     document
