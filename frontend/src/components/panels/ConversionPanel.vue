@@ -66,6 +66,9 @@ const hasBlockingIssue = computed(
   () => props.analysis?.issues.some(issue => issue.severity === ValidationSeverity.Error) ?? false
 );
 
+/** エクスポートボタンの無効条件: 解析未実施 or エラーあり */
+const exportDisabled = computed(() => !props.analysis || hasBlockingIssue.value);
+
 const outputMaxTextureDimension = computed(() => {
   if (!props.conversion || props.conversion.output_texture_infos.length === 0) {
     return 0;
@@ -95,7 +98,7 @@ const pickOutputFile = async () => {
   }
   const selected = await fs.saveFile({
     defaultPath: outputPath.value || defaultName,
-    filters: [{ name: 'GLB', extensions: ['glb'] }]
+    filters: [{ name: 'glTF Binary', extensions: ['glb'] }]
   });
   if (selected) {
     outputPath.value = selected;
@@ -205,7 +208,7 @@ onMounted(async () => {
           >
             <template #append>
               <v-btn
-                :disabled="hasBlockingIssue || !inputPath"
+                :disabled="exportDisabled"
                 :text="t('btn_export')"
                 color="success"
                 prepend-icon="mdi-file-export"
