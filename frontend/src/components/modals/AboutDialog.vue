@@ -26,7 +26,7 @@ const PROJECT_SITE = __PROJECT_SITE__;
       </v-tooltip>
     </template>
     <template #default="{ isActive }">
-      <v-card width="360" :title="t('about_title')">
+      <v-card :title="t('about_title')" width="360">
         <v-card-text class="text-center">
           <h2>{{ APP_NAME }}</h2>
           <p>

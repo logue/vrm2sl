@@ -23,6 +23,10 @@ const props = defineProps<{
   options: ConvertOptions;
 }>();
 
+const emit = defineEmits<{
+  'update:loading': [value: boolean];
+}>();
+
 const { t } = useI18n();
 
 const canvasHost = shallowRef<HTMLDivElement | null>(null);
@@ -130,6 +134,14 @@ const {
 
 const motionControlsDisabled = computed(() => loading.value || !modelRoot.value);
 
+watch(
+  () => loading.value,
+  value => {
+    emit('update:loading', value);
+  },
+  { immediate: true }
+);
+
 onMounted(() => {
   if (!canvasHost.value) {
     return;
@@ -218,25 +230,25 @@ onBeforeUnmount(() => {
           v-model="selectedMotionCategory"
           :items="PREVIEW_MOTION_CATEGORY_OPTIONS"
           :disabled="motionControlsDisabled"
+          :clearable="false"
           item-title="title"
           item-value="value"
-          :clearable="false"
           density="compact"
-          hide-details
           label="Category"
           style="max-width: 220px"
+          hide-details
         />
         <v-select
           v-model="selectedMotionValue"
           :items="FILTERED_MOTION_ITEMS"
           :disabled="motionControlsDisabled"
+          :clearable="false"
+          :label="t('motion_label')"
           item-title="title"
           item-value="value"
-          :clearable="false"
           density="compact"
-          hide-details
-          :label="t('motion_label')"
           style="max-width: 340px"
+          hide-details
         >
           <template #item="{ props: itemProps, item }">
             <v-list-item v-bind="itemProps" :prepend-icon="playbackIcon(item.playback)" />
@@ -250,19 +262,19 @@ onBeforeUnmount(() => {
           v-model="avatarGender"
           :disabled="motionControlsDisabled"
           :inline="true"
-          hide-details
           density="compact"
+          hide-details
         >
-          <v-radio value="female" :label="t('gender_female')" />
-          <v-radio value="male" :label="t('gender_male')" />
+          <v-radio :label="t('gender_female')" value="female" />
+          <v-radio :label="t('gender_male')" value="male" />
         </v-radio-group>
         <v-switch
           v-model="animationEnabled"
           :disabled="motionControlsDisabled"
+          :label="t('motion_play_label', { file: currentMotionName })"
           color="primary"
           density="compact"
           hide-details
-          :label="t('motion_play_label', { file: currentMotionName })"
         />
         <v-btn
           variant="tonal"

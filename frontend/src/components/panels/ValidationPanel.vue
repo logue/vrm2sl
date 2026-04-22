@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useConfigStore } from '@/store';
-import { storeToRefs } from 'pinia';
-import { computed } from 'vue';
+import { computed, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import type { AnalysisReport, ConversionReport } from '@/interfaces';
@@ -13,7 +12,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const configStore = useConfigStore();
-const { textureAutoResize } = storeToRefs(configStore);
+const textureAutoResize = toRef(configStore, 'textureAutoResize');
 
 const outputMaxTextureDimension = computed(() => {
   if (!props.conversion || props.conversion.output_texture_infos.length === 0) {

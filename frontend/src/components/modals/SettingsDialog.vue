@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useConfigStore, useGlobalStore } from '@/store';
-import { storeToRefs } from 'pinia';
-import { ref } from 'vue';
+import { ref, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { invoke } from '@tauri-apps/api/core';
@@ -15,41 +14,42 @@ const configStore = useConfigStore();
 const globalStore = useGlobalStore();
 const notification = useNotification(t);
 
-const {
-  heightScaleEnabled,
-  targetHeightCm,
-  manualScale,
-  textureAutoResize,
-  pbrEnabled,
-  inputPath,
-  outputPath,
-  settingsPath
-} = storeToRefs(configStore);
+const heightScaleEnabled = toRef(configStore, 'heightScaleEnabled');
+const targetHeightCm = toRef(configStore, 'targetHeightCm');
+const manualScale = toRef(configStore, 'manualScale');
+const textureAutoResize = toRef(configStore, 'textureAutoResize');
+const pbrEnabled = toRef(configStore, 'pbrEnabled');
+const inputPath = toRef(configStore, 'inputPath');
+const outputPath = toRef(configStore, 'outputPath');
+const settingsPath = toRef(configStore, 'settingsPath');
+const textureResizeMethod = toRef(configStore, 'textureResizeMethod');
+const face = toRef(configStore, 'face');
+const fingers = toRef(configStore, 'fingers');
 
 const tab = ref('common');
 
 const toProjectSettings = (): ProjectSettings => ({
   input_path: inputPath.value || undefined,
   output_path: outputPath.value || undefined,
-  target_height_cm: configStore.targetHeightCm,
-  manual_scale: configStore.manualScale,
-  texture_auto_resize: configStore.textureAutoResize,
-  texture_resize_method: configStore.textureResizeMethod,
-  pbr_enabled: configStore.pbrEnabled,
-  face: configStore.face,
-  fingers: configStore.fingers
+  target_height_cm: targetHeightCm.value,
+  manual_scale: manualScale.value,
+  texture_auto_resize: textureAutoResize.value,
+  texture_resize_method: textureResizeMethod.value,
+  pbr_enabled: pbrEnabled.value,
+  face: face.value,
+  fingers: fingers.value
 });
 
 const applyProjectSettings = (settings: ProjectSettings) => {
-  configStore.inputPath = settings.input_path ?? '';
-  configStore.outputPath = settings.output_path ?? '';
-  configStore.targetHeightCm = settings.target_height_cm;
-  configStore.manualScale = settings.manual_scale;
-  configStore.textureAutoResize = settings.texture_auto_resize;
-  configStore.textureResizeMethod = settings.texture_resize_method;
-  configStore.pbrEnabled = settings.pbr_enabled ?? true;
-  configStore.face = settings.face;
-  configStore.fingers = settings.fingers;
+  inputPath.value = settings.input_path ?? '';
+  outputPath.value = settings.output_path ?? '';
+  targetHeightCm.value = settings.target_height_cm;
+  manualScale.value = settings.manual_scale;
+  textureAutoResize.value = settings.texture_auto_resize;
+  textureResizeMethod.value = settings.texture_resize_method;
+  pbrEnabled.value = settings.pbr_enabled ?? true;
+  face.value = settings.face;
+  fingers.value = settings.fingers;
 };
 
 const saveSettings = async () => {
@@ -111,14 +111,14 @@ const loadSettings = async () => {
               <v-list nav>
                 <v-list-item
                   :title="t('common_options')"
-                  value="common"
                   :active="tab === 'common'"
+                  value="common"
                   @click="tab = 'common'"
                 />
               </v-list>
             </v-navigation-drawer>
             <v-main class="overflow-y-auto">
-              <v-card flat class="pa-2">
+              <v-card class="pa-2" flat>
                 <v-window v-model="tab">
                   <v-window-item value="common">
                     <v-card flat>
@@ -134,21 +134,21 @@ const loadSettings = async () => {
                           <v-col cols="12" md="4">
                             <v-text-field
                               v-model.number="targetHeightCm"
-                              type="number"
                               :label="t('target_height')"
-                              variant="outlined"
                               :disabled="!heightScaleEnabled"
+                              type="number"
+                              variant="outlined"
                             />
                           </v-col>
                           <v-col cols="12" md="4">
                             <v-slider
                               v-model="manualScale"
+                              :label="t('manual_scale')"
+                              :disabled="!heightScaleEnabled"
                               min="0.5"
                               max="1.5"
                               step="0.01"
                               thumb-label
-                              :label="t('manual_scale')"
-                              :disabled="!heightScaleEnabled"
                             />
                           </v-col>
                           <v-col cols="12" md="4" class="d-flex flex-column align-start">

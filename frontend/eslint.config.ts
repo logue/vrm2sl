@@ -145,6 +145,27 @@ export default defineConfigWithVueTs(
           'newlines-between': 'always'
         }
       ],
+      // Sort Vue attributes, see https://eslint.vuejs.org/rules/attributes-order.html
+      'vue/attributes-order': [
+        'warn',
+        {
+          order: [
+            'DEFINITION', // is, v-is
+            'LIST_RENDERING', // v-for
+            'CONDITIONALS', // v-if, v-else-if, v-else, v-show
+            'RENDER_MODIFIERS', // v-pre, v-once
+            'UNIQUE', // ref, key
+            'TWO_WAY_BINDING', // v-model
+            'OTHER_DIRECTIVES', // その他のディレクティブ
+            'ATTR_DYNAMIC', // :prop
+            'ATTR_STATIC', // prop="value"
+            'ATTR_SHORTHAND_BOOL', // disabled
+            'EVENTS', // @click
+            'CONTENT' // v-html, v-text
+          ],
+          alphabetical: false
+        }
+      ],
       // A tag with no content should be written like <br />.
       'vue/html-self-closing': [
         'error',

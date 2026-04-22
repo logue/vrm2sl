@@ -16,7 +16,7 @@ function changeLocale(newLocale: string) {
 <template>
   <v-menu location="bottom">
     <template #activator="{ props }">
-      <v-btn v-bind="props" icon variant="plain">
+      <v-btn v-bind="props" variant="plain" icon>
         <v-icon>mdi-translate</v-icon>
         <v-tooltip :text="t('locale')" activator="parent" location="bottom" />
       </v-btn>

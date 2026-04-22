@@ -1,3 +1,4 @@
+import { useGlobalStore } from '@/store';
 import type { ComposerTranslation } from 'vue-i18n';
 
 import {
@@ -10,6 +11,8 @@ import {
  * デスクトップ通知を送信するためのcomposable
  */
 export const useNotification = (t: ComposerTranslation) => {
+  const globalStore = useGlobalStore();
+
   /**
    * 通知権限を要求し、通知を送信
    */
@@ -37,6 +40,7 @@ export const useNotification = (t: ComposerTranslation) => {
    * 画像変換完了通知
    */
   const success = async (message: string) => {
+    globalStore.setMessage(message, 'success');
     // 画像変換処理が完了したことを通知
     await notify(t('notification.success.title'), message);
   };
@@ -45,6 +49,7 @@ export const useNotification = (t: ComposerTranslation) => {
    * エラー通知
    */
   const error = async (message: string) => {
+    globalStore.setMessage(message, 'error');
     await notify(t('notification.error.title'), message);
   };
 

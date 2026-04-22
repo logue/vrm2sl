@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useConfigStore, useGlobalStore } from '@/store';
-import { storeToRefs } from 'pinia';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { invoke } from '@tauri-apps/api/core';
@@ -28,17 +27,15 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const globalStore = useGlobalStore();
 const configStore = useConfigStore();
-const {
-  targetHeightCm,
-  manualScale,
-  textureAutoResize,
-  pbrEnabled,
-  inputPath,
-  outputPath,
-  textureResizeMethod,
-  face,
-  fingers
-} = storeToRefs(configStore);
+const targetHeightCm = toRef(configStore, 'targetHeightCm');
+const manualScale = toRef(configStore, 'manualScale');
+const textureAutoResize = toRef(configStore, 'textureAutoResize');
+const pbrEnabled = toRef(configStore, 'pbrEnabled');
+const inputPath = toRef(configStore, 'inputPath');
+const outputPath = toRef(configStore, 'outputPath');
+const textureResizeMethod = toRef(configStore, 'textureResizeMethod');
+const face = toRef(configStore, 'face');
+const fingers = toRef(configStore, 'fingers');
 
 const notification = useNotification(t);
 const fs = useFileSystem();
@@ -46,32 +43,53 @@ const fs = useFileSystem();
 const appVersion = ref('');
 const convertResultPath = ref('');
 const showVersionErrorDialog = ref(false);
+const previewLoading = ref(false);
+const operationLoading = ref(false);
 
 const { isDropActive, showDropWarningDialog, dropWarningTitleKey, dropWarningMessageKey } =
   useVrmFileDrop(inputPath);
 
 const options = ref<ConvertOptions>({
-  target_height_cm: configStore.targetHeightCm,
-  manual_scale: configStore.manualScale,
-  texture_auto_resize: configStore.textureAutoResize,
-  texture_resize_method: configStore.textureResizeMethod,
-  pbr_enabled: configStore.pbrEnabled
+  target_height_cm: targetHeightCm.value,
+  manual_scale: manualScale.value,
+  texture_auto_resize: textureAutoResize.value,
+  texture_resize_method: textureResizeMethod.value,
+  pbr_enabled: pbrEnabled.value
 });
 
 watch([targetHeightCm, manualScale, textureAutoResize, pbrEnabled, textureResizeMethod], () => {
-  options.value.target_height_cm = configStore.targetHeightCm;
-  options.value.manual_scale = configStore.manualScale;
-  options.value.texture_auto_resize = configStore.textureAutoResize;
-  options.value.texture_resize_method = configStore.textureResizeMethod;
-  options.value.pbr_enabled = configStore.pbrEnabled;
+  options.value.target_height_cm = targetHeightCm.value;
+  options.value.manual_scale = manualScale.value;
+  options.value.texture_auto_resize = textureAutoResize.value;
+  options.value.texture_resize_method = textureResizeMethod.value;
+  options.value.pbr_enabled = pbrEnabled.value;
+});
+
+watch(inputPath, (newPath, oldPath) => {
+  // Clear output when switching to a different input VRM to avoid accidental overwrite.
+  if (newPath && oldPath && newPath !== oldPath) {
+    outputPath.value = '';
+  }
 });
 
 const hasBlockingIssue = computed(
   () => props.analysis?.issues.some(issue => issue.severity === ValidationSeverity.Error) ?? false
 );
 
-/** エクスポートボタンの無効条件: 解析未実施 or エラーあり */
-const exportDisabled = computed(() => !props.analysis || hasBlockingIssue.value);
+/** エクスポートボタンの無効条件: 入出力パス不足 or 解析エラーあり */
+const exportDisabled = computed(
+  () => !inputPath.value || !outputPath.value || previewLoading.value || hasBlockingIssue.value
+);
+
+const uiLocked = computed(() => previewLoading.value || operationLoading.value);
+
+watch(
+  uiLocked,
+  locked => {
+    globalStore.setLoading(locked);
+  },
+  { immediate: true }
+);
 
 const outputMaxTextureDimension = computed(() => {
   if (!props.conversion || props.conversion.output_texture_infos.length === 0) {
@@ -114,7 +132,7 @@ const runAnalyze = async () => {
     notification.error(t('error_no_input'));
     return;
   }
-  globalStore.setLoading(true);
+  operationLoading.value = true;
   try {
     emit('update:conversion', null);
     const result = await invoke<AnalysisReport>('analyze_vrm_command', {
@@ -133,7 +151,7 @@ const runAnalyze = async () => {
   } catch (error) {
     notification.error(String(error));
   } finally {
-    globalStore.setLoading(false);
+    operationLoading.value = false;
   }
 };
 
@@ -142,7 +160,7 @@ const runExport = async () => {
     notification.error(t('error_no_paths'));
     return;
   }
-  globalStore.setLoading(true);
+  operationLoading.value = true;
   try {
     const result = await invoke<ConversionReport>('convert_vrm_command', {
       request: {
@@ -158,7 +176,7 @@ const runExport = async () => {
   } catch (error) {
     notification.error(String(error));
   } finally {
-    globalStore.setLoading(false);
+    operationLoading.value = false;
   }
 };
 
@@ -195,16 +213,16 @@ onMounted(async () => {
             v-model="inputPath"
             :label="t('input_vrm')"
             append-inner-icon="mdi-folder-open"
-            clearable
             prepend-icon="mdi-import"
+            clearable
             @click:append-inner="pickInputFile"
           >
             <template #append>
               <v-btn
                 :text="t('btn_analyze')"
+                :disabled="!inputPath"
                 color="primary"
                 prepend-icon="mdi-magnify"
-                :disabled="!inputPath"
                 @click="runAnalyze"
               />
             </template>
@@ -284,7 +302,11 @@ onMounted(async () => {
     </v-col>
 
     <v-col cols="12" lg="6">
-      <vrm-preview :file-path="inputPath" :options="options" />
+      <vrm-preview
+        :file-path="inputPath"
+        :options="options"
+        @update:loading="previewLoading = $event"
+      />
     </v-col>
   </v-row>
 </template>
