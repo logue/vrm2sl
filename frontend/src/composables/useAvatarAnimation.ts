@@ -8,11 +8,11 @@ import { ref, type Ref } from 'vue';
 import * as THREE from 'three';
 import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 
-import { formatPreviewMotionTitle } from '@/constants/previewAnimations';
-
 import { buildRetargetedClip, buildProceduralIdleClip } from './useBvhRetargeting';
 
-import type { MotionMode } from './useVrmGender';
+import type { MotionMode } from './useVrmFile';
+
+import { formatPreviewMotionTitle } from '@/constants/previewAnimations';
 
 // Accept any string key to work with component-scoped <i18n> blocks that are
 // not visible to the vue-i18n TypeScript plugin from inside an external composable.

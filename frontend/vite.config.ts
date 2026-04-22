@@ -1,3 +1,4 @@
+// eslint-disable: security/detect-non-literal-fs-filename
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 

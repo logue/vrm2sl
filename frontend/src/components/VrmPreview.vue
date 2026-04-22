@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { ConvertOptions } from '@/interfaces';
 
 import { useAvatarAnimation } from '@/composables/useAvatarAnimation';
-import { detectGenderFromVrm, resolveMotionPath } from '@/composables/useVrmGender';
+import { resolveMotionPath, type AvatarGender } from '@/composables/useVrmFile';
 import { useVrmPreviewScene } from '@/composables/useVrmPreviewScene';
 import {
   playbackIcon,
@@ -27,7 +27,6 @@ const { t } = useI18n();
 
 const canvasHost = shallowRef<HTMLDivElement | null>(null);
 const animationEnabled = ref(true);
-type AvatarGender = 'female' | 'male' | 'unknown';
 type MotionSelectionCategory = PreviewMotionCategory | 'system';
 type MotionItem = {
   title: string;
@@ -38,7 +37,7 @@ type MotionItem = {
 const selectedMotionMode = ref<'idle' | 'walk' | 'custom'>('idle');
 const selectedMotionCategory = ref<MotionSelectionCategory>('system');
 const selectedMotionValue = ref<string>('idle');
-const avatarGender = ref<AvatarGender>('unknown');
+const avatarGender = ref<AvatarGender>('male');
 const currentMotionPath = ref('/animations/avatar_stand_1.bvh');
 // shallowRef を使用して Three.js オブジェクトが Vue のディープリアクティブ Proxy でラップされるのを防ぐ。
 // ref() は内部プロパティを Proxy 化するため scene.add() や行列演算が壊れる。
@@ -120,8 +119,7 @@ const {
   canvasHost,
   modelRoot,
   animationEnabled,
-  onBeforeLoad: async (path: string) => {
-    avatarGender.value = await detectGenderFromVrm(path);
+  onBeforeLoad: async (_path: string) => {
     applyMotionSelection();
   },
   applyOrLoadAnimation,
@@ -129,6 +127,8 @@ const {
   disposeMixer,
   tickMixer
 });
+
+const motionControlsDisabled = computed(() => loading.value || !modelRoot.value);
 
 onMounted(() => {
   if (!canvasHost.value) {
@@ -194,6 +194,16 @@ watch(
   }
 );
 
+watch(
+  () => avatarGender.value,
+  () => {
+    applyMotionSelection();
+    if (animationEnabled.value) {
+      void applyOrLoadAnimation();
+    }
+  }
+);
+
 onBeforeUnmount(() => {
   disposeScene();
 });
@@ -207,6 +217,7 @@ onBeforeUnmount(() => {
         <v-select
           v-model="selectedMotionCategory"
           :items="PREVIEW_MOTION_CATEGORY_OPTIONS"
+          :disabled="motionControlsDisabled"
           item-title="title"
           item-value="value"
           :clearable="false"
@@ -218,6 +229,7 @@ onBeforeUnmount(() => {
         <v-select
           v-model="selectedMotionValue"
           :items="FILTERED_MOTION_ITEMS"
+          :disabled="motionControlsDisabled"
           item-title="title"
           item-value="value"
           :clearable="false"
@@ -234,8 +246,19 @@ onBeforeUnmount(() => {
             <span>{{ currentMotionLabel }}</span>
           </template>
         </v-select>
+        <v-radio-group
+          v-model="avatarGender"
+          :disabled="motionControlsDisabled"
+          :inline="true"
+          hide-details
+          density="compact"
+        >
+          <v-radio value="female" :label="t('gender_female')" />
+          <v-radio value="male" :label="t('gender_male')" />
+        </v-radio-group>
         <v-switch
           v-model="animationEnabled"
+          :disabled="motionControlsDisabled"
           color="primary"
           density="compact"
           hide-details
@@ -279,6 +302,8 @@ en:
   no_file_selected: Select a VRM file to display the preview here.
   motion_idle: Idle
   motion_walk: Walk
+  gender_female: Female
+  gender_male: Male
   status_disabled: Motion is disabled.
   status_waiting: Waiting for motion to load.
   status_no_skinned_mesh: No skinned mesh found; cannot apply idle motion.
@@ -298,6 +323,8 @@ fr:
   no_file_selected: Sélectionnez un fichier VRM pour afficher la prévisualisation ici.
   motion_idle: Inactif
   motion_walk: Marche
+  gender_female: Femme
+  gender_male: Homme
   status_disabled: Le mouvement est désactivé.
   status_waiting: En attente du chargement du mouvement.
   status_no_skinned_mesh: Aucun maillage skinné trouvé ; impossible d'appliquer le mouvement inactif.
@@ -317,6 +344,8 @@ ja:
   no_file_selected: VRMファイルを選択するとここに表示されます。
   motion_idle: 待機
   motion_walk: 歩行
+  gender_female: 女性
+  gender_male: 男性
   status_disabled: モーションは無効です。
   status_waiting: モーション読み込み待ちです。
   status_no_skinned_mesh: スキン付きメッシュが見つからず、待機モーションを適用できません。
@@ -336,6 +365,8 @@ ko:
   no_file_selected: VRM 파일을 선택하면 여기에 표시됩니다.
   motion_idle: 대기
   motion_walk: 걷기
+  gender_female: 여성
+  gender_male: 남성
   status_disabled: 모션이 비활성화되어 있습니다.
   status_waiting: 모션 로드를 기다리는 중입니다.
   status_no_skinned_mesh: 스킨 메시를 찾을 수 없어 대기 모션을 적용할 수 없습니다.
@@ -355,6 +386,8 @@ zhHant:
   no_file_selected: 選擇 VRM 檔案後將在此顯示預覽。
   motion_idle: 待機
   motion_walk: 行走
+  gender_female: 女性
+  gender_male: 男性
   status_disabled: 動作已停用。
   status_waiting: 等待動作載入中。
   status_no_skinned_mesh: 找不到蒙皮網格，無法套用待機動作。
