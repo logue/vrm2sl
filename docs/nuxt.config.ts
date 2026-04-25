@@ -18,6 +18,8 @@ const loadEnvValue = (key: string, defaultValue: string = ''): string => {
 const version = loadEnvValue('VERSION', '0.0.0');
 const appName = loadEnvValue('APP_NAME', 'Vrm2SL');
 const siteName = loadEnvValue('NUXT_PUBLIC_SITE_NAME', 'Vrm2SL Documentation');
+const siteUrl = loadEnvValue('NUXT_PUBLIC_SITE_URL', 'https://logue.dev/vrm2sl');
+const appBaseUrl = loadEnvValue('NUXT_APP_BASE_URL', '/vrm2sl/');
 const projectUrl = loadEnvValue('PROJECT_URL', 'https://github.com');
 const googleAnalyticsId = loadEnvValue('GOOGLE_ANALYTICS_ID', 'UA-33600926-1');
 
@@ -45,13 +47,13 @@ export default defineNuxtConfig({
 
   // サイト設定
   site: {
-    url: process.env.NUXT_PUBLIC_SITE_URL || 'https://logue.dev',
-    name: process.env.NUXT_PUBLIC_SITE_NAME || 'Tauri Vue3 App'
+    url: siteUrl,
+    name: siteName
   },
 
   // アプリ設定
   app: {
-    baseURL: process.env.NUXT_APP_BASE_URL || '/vrm2sl/',
+    baseURL: appBaseUrl,
     head: {
       link: [
         // app側と同じGoogle Fontsを読み込み
@@ -93,6 +95,7 @@ export default defineNuxtConfig({
       { code: 'zhHant', language: 'zh-TW', name: '🇹🇼 繁體中文', iso: 'zh-TW' }
     ],
     strategy: 'prefix_except_default',
+    baseUrl: siteUrl,
     defaultLocale: 'en',
     detectBrowserLanguage: {
       useCookie: true,

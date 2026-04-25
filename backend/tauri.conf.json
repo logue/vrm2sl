@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "vrm2sl",
-  "version": "0.8.2-alpha.1",
-  "identifier": "${TAURI_APP_IDENTIFIER}",
+  "version": "0.8.3-alpha.3",
+  "identifier": "dev.logue.vrm2sl",
   "build": {
     "beforeDevCommand": "pnpm --dir frontend dev",
     "devUrl": "http://localhost:1420",

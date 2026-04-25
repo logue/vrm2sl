@@ -42,7 +42,7 @@ jobs:
 
       # 5. Nuxtアプリをビルド
       - name: Build
-        run: pnpm run build --filter docs
+        run: pnpm --filter docs build
         env:
           GITHUB_PAGES: true
           NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/

@@ -234,7 +234,7 @@ export default meta;
     tauriConf.productName = appNameKebab;
     tauriConf.mainBinaryName = appName;
     tauriConf.version = version;
-    tauriConf.identifier = '${TAURI_APP_IDENTIFIER}';
+    tauriConf.identifier = tauriAppIdentifier;
 
     if (tauriConf.app?.windows?.[0]) {
       tauriConf.app.windows[0].title = appName;
