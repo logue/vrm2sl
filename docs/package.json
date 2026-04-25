@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "nuxt build",
+    "postbuild": "cp .output/public/index.html .output/public/404.html",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
