@@ -29,7 +29,9 @@ function runTauriBuild(configToUse, extraArgs) {
       {
         cwd: repoRoot,
         stdio: "inherit",
-        shell: process.platform === "win32",
+        // Keep shell disabled so Windows paths like "C:\\Program Files\\...\\node.exe"
+        // are passed to CreateProcess intact.
+        shell: false,
       },
     );
 
