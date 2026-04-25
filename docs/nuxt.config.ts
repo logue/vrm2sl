@@ -58,6 +58,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       appVersion: version,
+      appNameKebab: loadEnvValue('APP_NAME_KEBAB', 'vrm2sl'),
       siteUrl,
       appBaseUrl: normalizedAppBaseUrl
     }
