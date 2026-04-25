@@ -95,7 +95,7 @@ export default defineNuxtConfig({
       { code: 'zhHant', language: 'zh-TW', name: '🇹🇼 繁體中文', iso: 'zh-TW' }
     ],
     strategy: 'prefix_except_default',
-    baseUrl: siteUrl,
+    baseUrl: 'https://logue.dev',
     defaultLocale: 'en',
     detectBrowserLanguage: {
       useCookie: true,
