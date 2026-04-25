@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import logo from '@/assets/logo.png';
 const { locale, rt, t, tm } = useI18n();
+const localePath = useLocalePath();
 
 // Composables
 const { version, downloads, primaryDownload, detectPlatform } = useDownloads();
@@ -55,11 +56,10 @@ setupSeoMeta();
         {{ rt(description) }}
       </p>
     </v-card-text>
-    <!--v-card-actions class="justify-center">
+    <v-card-actions class="justify-center">
       <v-btn
-        disabled
-        :to="localePath('getting-started')"
-        class="ma-4"
+        :to="localePath('/user-guide')"
+        class="ma-4 px-8"
         color="primary"
         prepend-icon="mdi-rocket"
         size="large"
@@ -67,7 +67,7 @@ setupSeoMeta();
       >
         {{ t('lead.start_button') }}
       </v-btn>
-    </!v-card-actions-->
+    </v-card-actions>
   </v-card>
 
   <v-card class="mb-6 bg-transparent" flat tag="section">

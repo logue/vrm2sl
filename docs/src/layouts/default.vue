@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { useTheme } from 'vuetify';
 
 import { useConfigStore } from '../store';
@@ -13,7 +14,7 @@ const configStore = useConfigStore();
 const drawer: Ref<boolean> = ref(false);
 
 // import.meta.env はテンプレートで直接使えないので変数に取り出す
-const appName = import.meta.env.VITE_APP_NAME as string | undefined;
+const appName = import.meta.env.APP_NAME as string | undefined;
 
 /** Toggle Dark mode */
 const isDark: ComputedRef<string> = computed(() => (configStore.theme ? 'dark' : 'light'));

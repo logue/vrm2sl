@@ -1,13 +1,13 @@
 name: Deploy Nuxt App to GitHub Pages
 
 on:
-  # masterブランチにプッシュされたときに実行
+  # mainブランチにプッシュされたときに実行
   push:
-    branches: ["master"]
+    branches: [ "main" ]
   # Actionsタブから手動で実行することも可能にする
   workflow_dispatch:
 
-# GITHUB_TOKENの権限設定
+    # GITHUB_TOKENの権限設定
 permissions:
   contents: read
   pages: write
@@ -42,7 +42,7 @@ jobs:
 
       # 5. Nuxtアプリをビルド
       - name: Build
-        run: pnpm build:docs
+        run: pnpm run build --filter docs
         env:
           GITHUB_PAGES: true
           NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/

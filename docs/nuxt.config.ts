@@ -16,7 +16,10 @@ const loadEnvValue = (key: string, defaultValue: string = ''): string => {
 };
 
 const version = loadEnvValue('VERSION', '0.0.0');
-const googleAnalyticsId = loadEnvValue('GOOGLE_ANALYTICS_ID', '');
+const appName = loadEnvValue('APP_NAME', 'Vrm2SL');
+const siteName = loadEnvValue('NUXT_PUBLIC_SITE_NAME', 'Vrm2SL Documentation');
+const projectUrl = loadEnvValue('PROJECT_URL', 'https://github.com');
+const googleAnalyticsId = loadEnvValue('GOOGLE_ANALYTICS_ID', 'UA-33600926-1');
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
@@ -43,7 +46,7 @@ export default defineNuxtConfig({
   // サイト設定
   site: {
     url: process.env.NUXT_PUBLIC_SITE_URL || 'https://logue.dev',
-    name: 'Tauri Vue3 App'
+    name: process.env.NUXT_PUBLIC_SITE_NAME || 'Tauri Vue3 App'
   },
 
   // アプリ設定
@@ -111,6 +114,15 @@ export default defineNuxtConfig({
 
   build: {
     transpile: ['vue-i18n']
+  },
+
+  // Vite設定 - APP_NAME、NUXT_PUBLIC_SITE_NAME、PROJECT_URL をビルド時に注入
+  vite: {
+    define: {
+      'import.meta.env.APP_NAME': JSON.stringify(appName),
+      'import.meta.env.NUXT_PUBLIC_SITE_NAME': JSON.stringify(siteName),
+      'import.meta.env.PROJECT_URL': JSON.stringify(projectUrl)
+    }
   },
 
   // Nitro設定（SSG用プリレンダリング - 自動生成を利用）
