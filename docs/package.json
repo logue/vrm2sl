@@ -5,9 +5,10 @@
   "private": true,
   "scripts": {
     "build": "nuxt build",
-    "postbuild": "cp .output/public/index.html .output/public/404.html",
+    "postbuild": "cp .output/public/index.html .output/public/404.html && touch .output/public/.nojekyll",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
+    "postgenerate": "cp .output/public/index.html .output/public/404.html && touch .output/public/.nojekyll",
     "preview": "nuxt preview",
     "clean": "rimraf .nuxt .output public/_nuxt",
     "clean:full": "rimraf .nuxt .output public/_nuxt node_modules/.vite node_modules/.cache",

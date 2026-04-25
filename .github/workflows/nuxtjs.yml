@@ -45,20 +45,24 @@ jobs:
         run: pnpm --filter docs build
         env:
           GITHUB_PAGES: true
-          NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/
+          NUXT_APP_BASE_URL: /${{ github.event.repository.name }}
 
-      # 6. GitHub Pages用の設定
+      # 6. GitHub Pagesで _nuxt 等を配信するため Jekyll を無効化
+      - name: Disable Jekyll
+        run: touch docs/.output/public/.nojekyll
+
+      # 7. GitHub Pages用の設定
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      # 7. ビルド成果物をアップロード
+      # 8. ビルド成果物をアップロード
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           # Nuxt3のデフォルト出力先は .output/public
           path: "docs/.output/public"
 
-      # 8. GitHub Pagesにデプロイ
+      # 9. GitHub Pagesにデプロイ
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

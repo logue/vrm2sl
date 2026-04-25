@@ -6,20 +6,39 @@ import ogp from '@/assets/ogp.png';
 export const useSeoMetadata = () => {
   const { locale, t } = useI18n();
   const { version } = useDownloads();
+  const config = useRuntimeConfig();
 
-  // サイトのベースURL
-  const sitePath = import.meta.env.BASE_URL || '/';
+  // サイトのベースURL（絶対URL）
+  const sitePath = computed(() => {
+    const value = String(config.public.siteUrl || 'https://logue.dev');
+    return value.replace(/\/+$/, '');
+  });
+
+  // アプリのベースURL（パス）
+  const appBasePath = computed(() => {
+    const value = String(config.public.appBaseUrl || '/');
+    if (!value || value === '/') {
+      return '/';
+    }
+    return `/${value.replace(/^\/+|\/+$/g, '')}`;
+  });
+
+  const rootUrl = computed(() => {
+    const normalizedPath = appBasePath.value === '/' ? '/' : `${appBasePath.value}/`;
+    return new URL(normalizedPath, `${sitePath.value}/`).toString();
+  });
+
   // プロジェクトのベースURL
   const projectUrl = import.meta.env.PROJECT_URL || '/';
 
   const currentUrl = computed(() => {
-    const path = locale.value === 'en' ? '' : `/${locale.value}`;
-    return `${sitePath}/${path}`;
+    const path = locale.value === 'en' ? '' : `${locale.value}/`;
+    return new URL(path, rootUrl.value).toString();
   });
 
   // OGP画像
   const ogImage = computed(() => {
-    return `${sitePath}/${ogp}`;
+    return new URL(ogp, rootUrl.value).toString();
   });
 
   // 言語リスト定義
@@ -40,7 +59,7 @@ export const useSeoMetadata = () => {
     links.push({
       rel: 'alternate',
       hreflang: 'x-default',
-      href: `${sitePath}`
+      href: rootUrl.value
     });
 
     // 各言語
@@ -49,13 +68,13 @@ export const useSeoMetadata = () => {
         links.push({
           rel: 'alternate',
           hreflang: 'en',
-          href: `${sitePath}/`
+          href: rootUrl.value
         });
       } else {
         links.push({
           rel: 'alternate',
           hreflang: lang.code,
-          href: `${sitePath}/${lang.code}/`
+          href: new URL(`${lang.code}/`, rootUrl.value).toString()
         });
       }
     });
@@ -86,7 +105,7 @@ export const useSeoMetadata = () => {
         priceCurrency: 'USD'
       },
       description: unref(t('lead.description[0]')),
-      url: `${sitePath}`,
+      url: currentUrl.value,
       image: unref(ogImage),
       softwareVersion: unref(version),
       releaseNotes: `${projectUrl}/releases/tag/${unref(version)}`,

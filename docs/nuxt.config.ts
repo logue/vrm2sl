@@ -23,6 +23,22 @@ const appBaseUrl = loadEnvValue('NUXT_APP_BASE_URL', '/vrm2sl/');
 const projectUrl = loadEnvValue('PROJECT_URL', 'https://github.com');
 const googleAnalyticsId = loadEnvValue('GOOGLE_ANALYTICS_ID', 'UA-33600926-1');
 
+const normalizedAppBaseUrl = (() => {
+  const trimmed = appBaseUrl.trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}`;
+})();
+
+const i18nBaseUrl = (() => {
+  try {
+    return new URL(siteUrl).origin;
+  } catch {
+    return 'https://logue.dev';
+  }
+})();
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   // SSG設定（CSS外部化対応）
@@ -41,7 +57,9 @@ export default defineNuxtConfig({
   // Runtime config to expose version
   runtimeConfig: {
     public: {
-      appVersion: version
+      appVersion: version,
+      siteUrl,
+      appBaseUrl: normalizedAppBaseUrl
     }
   },
 
@@ -53,7 +71,7 @@ export default defineNuxtConfig({
 
   // アプリ設定
   app: {
-    baseURL: appBaseUrl,
+    baseURL: normalizedAppBaseUrl,
     head: {
       link: [
         // app側と同じGoogle Fontsを読み込み
@@ -95,7 +113,7 @@ export default defineNuxtConfig({
       { code: 'zhHant', language: 'zh-TW', name: '🇹🇼 繁體中文', iso: 'zh-TW' }
     ],
     strategy: 'prefix_except_default',
-    baseUrl: 'https://logue.dev',
+    baseUrl: i18nBaseUrl,
     defaultLocale: 'en',
     detectBrowserLanguage: {
       useCookie: true,
