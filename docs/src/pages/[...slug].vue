@@ -6,7 +6,15 @@ import { withLeadingSlash } from 'ufo';
 
 const route = useRoute();
 const { locale, t } = useI18n();
-const slug = computed(() => withLeadingSlash(String(route.params.slug)));
+const slug = computed(() => {
+  const rawSlug = route.params.slug;
+  const segments = (Array.isArray(rawSlug) ? rawSlug : [rawSlug])
+    .map(segment => String(segment ?? '').trim())
+    .filter(Boolean);
+
+  const normalizedPath = withLeadingSlash(segments.join('/')).replace(/\/+$/g, '');
+  return normalizedPath || '/';
+});
 
 // キーを文字列で渡す（関数渡しは Nuxt 4 では IPC 競合の原因になる）。
 // i18n の prefix_except_default 戦略ではロケール切り替えが必ずルート変化を伴うため
