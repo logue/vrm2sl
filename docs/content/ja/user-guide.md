@@ -38,4 +38,4 @@ vrm2sl input.vrm output.glb --analyze-only --report report.json
 
 ## 注意事項
 
-- 不特定多数に配布したり、マーケットプレイスで再販したい場合は、必ず**ライセンスを確認**してください。[Booth](https://booth.pm/ja/browse/VRoid)や[Vroid Hub](https://hub.vroid.com/)、[ニコニコモンズ](https://commons.nicovideo.jp/search?keywords=VROID&sort=created&order=desc)、[Etsy](https://www.etsy.com/jp/search?q=Vroid&ref=search_bar)で販売や配布されているアバターの多くは**二次利用や再配布、再販を禁じています**。
+不特定多数に配布したり、マーケットプレイスで再販したい場合は、必ず**ライセンスを確認**してください。[Booth](https://booth.pm/ja/browse/VRoid)や[Vroid Hub](https://hub.vroid.com/)、[ニコニコモンズ](https://commons.nicovideo.jp/search?keywords=VROID&sort=created&order=desc)、[Etsy](https://www.etsy.com/jp/search?q=Vroid&ref=search_bar)で販売や配布されているアバターの多くは**二次利用や再配布、再販を禁じています**。
