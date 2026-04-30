@@ -1,8 +1,7 @@
 // The i18n keys used in this composable are defined in the calling component's
 // scoped <i18n> block (VrmPreview.vue). The @intlify plugin only knows about
-// global resources and therefore reports the keys as missing. Suppress those
-// warnings for this file since the keys are correct at runtime.
-/* eslint-disable @intlify/vue-i18n/no-missing-keys */
+// global resources and therefore reports the keys as missing. The keys are
+// correct at runtime; the plugin cannot resolve component-scoped i18n blocks.
 import { ref, type Ref } from 'vue';
 
 import * as THREE from 'three';
@@ -16,7 +15,7 @@ import { formatPreviewMotionTitle } from '@/constants/previewAnimations';
 
 // Accept any string key to work with component-scoped <i18n> blocks that are
 // not visible to the vue-i18n TypeScript plugin from inside an external composable.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- component-scoped i18n blocks are not visible to the type plugin
 type TFunction = (key: any, params?: any) => string;
 
 export interface UseAvatarAnimationOptions {

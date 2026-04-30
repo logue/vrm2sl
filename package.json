@@ -33,22 +33,26 @@
     "build:clean": "pnpm --recursive exec rimraf dist",
     "build:mac": "pnpm run build:tauri:mac",
     "build:tauri": "pnpm --filter frontend build:tauri",
-    "build:tauri:mac": "pnpm --filter frontend build:tauri --target universal-apple-darwin",
+    "build:tauri:mac": "pnpm --filter frontend build:tauri:mac",
     "build:tauri:linux-x64": "pnpm --filter frontend build:tauri:linux-docker-x64",
     "build:tauri:linux-arm64": "pnpm --filter frontend build:tauri:linux-docker-arm64",
     "build:docs": "pnpm --filter docs build",
-    "lint": "pnpm --filter frontend lint",
+    "package:chocolatey": "pwsh ./scripts/build-chocolatey.ps1",
+    "package:homebrew": "bash ./scripts/build-homebrew.sh",
+    "generate": "pnpm --filter docs generate",
+    "deploy": "pnpm --filter docs deploy",
+    "lint": "pnpm --filter frontend lint && pnpm --filter docs lint",
     "preview": "pnpm --filter frontend preview",
+    "preview:docs": "pnpm --filter docs preview",
     "type-check": "pnpm --recursive exec vue-tsc --build --force",
-    "tauri": "pnpm --filter frontend tauri"
+    "tauri": "pnpm --filter frontend tauri",
+    "prepare": "husky",
+    "postinstall": "pnpm --filter docs nuxt:prepare"
   },
   "resolutions": {
-    "lodash": ">=4.18.1",
     "js-yaml": ">=4.1.1",
-    "defu": ">=6.1.7",
-    "vite": ">=8.0.8",
-    "unhead": ">=3.0.2",
-    "fast-xml-parser": ">=5.7.2",
-    "postcss": ">=8.5.10"
+    "vite": ">=8.0.10",
+    "unhead": ">=3.0.4",
+    "postcss": ">=8.5.12"
   }
 }

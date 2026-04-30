@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "vrm2sl",
+  "productName": "Vrm2SL",
   "version": "0.8.3-alpha.3",
   "identifier": "dev.logue.vrm2sl",
   "build": {

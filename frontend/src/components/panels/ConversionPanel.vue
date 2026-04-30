@@ -3,12 +3,11 @@ import { useConfigStore, useGlobalStore } from '@/store';
 import { computed, onMounted, ref, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { invoke } from '@tauri-apps/api/core';
-
 import type { AnalysisReport, ConversionReport, ConvertOptions } from '@/interfaces';
 
 import VrmPreview from '@/components/VrmPreview.vue';
 import MessageDialog from '@/components/modals/MessageDialog.vue';
+import { useConversion } from '@/composables/useConversion';
 import { useFileSystem } from '@/composables/useFileSystem';
 import { useNotification } from '@/composables/useNotification';
 import { useVrmFileDrop } from '@/composables/useVrmFileDrop';
@@ -39,6 +38,7 @@ const fingers = toRef(configStore, 'fingers');
 
 const notification = useNotification(t);
 const fs = useFileSystem();
+const conversionApi = useConversion();
 
 const appVersion = ref('');
 const convertResultPath = ref('');
@@ -135,12 +135,10 @@ const runAnalyze = async () => {
   operationLoading.value = true;
   try {
     emit('update:conversion', null);
-    const result = await invoke<AnalysisReport>('analyze_vrm_command', {
-      request: {
-        input_path: inputPath.value,
-        options: options.value,
-        notify_on_complete: true
-      }
+    const result = await conversionApi.analyzeVrm({
+      input_path: inputPath.value,
+      options: options.value,
+      notify_on_complete: true
     });
     emit('update:analysis', result);
     if (result.issues.some(issue => issue.code === 'UNSUPPORTED_VRM_VERSION')) {
@@ -162,13 +160,11 @@ const runExport = async () => {
   }
   operationLoading.value = true;
   try {
-    const result = await invoke<ConversionReport>('convert_vrm_command', {
-      request: {
-        input_path: inputPath.value,
-        output_path: outputPath.value,
-        options: options.value,
-        notify_on_complete: true
-      }
+    const result = await conversionApi.convertVrm({
+      input_path: inputPath.value,
+      output_path: outputPath.value,
+      options: options.value,
+      notify_on_complete: true
     });
     emit('update:conversion', result);
     convertResultPath.value = outputPath.value;
@@ -182,7 +178,7 @@ const runExport = async () => {
 
 onMounted(async () => {
   try {
-    appVersion.value = await invoke<string>('get_app_version');
+    appVersion.value = await conversionApi.getAppVersion();
   } catch (error) {
     console.error('Failed to get version:', error);
   }

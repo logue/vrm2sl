@@ -3,16 +3,16 @@ import { useConfigStore, useGlobalStore } from '@/store';
 import { ref, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { invoke } from '@tauri-apps/api/core';
-
 import type { ProjectSettings } from '@/interfaces';
 
 import { useNotification } from '@/composables/useNotification';
+import { useProjectSettings } from '@/composables/useProjectSettings';
 
 const { t } = useI18n();
 const configStore = useConfigStore();
 const globalStore = useGlobalStore();
 const notification = useNotification(t);
+const projectSettings = useProjectSettings();
 
 const heightScaleEnabled = toRef(configStore, 'heightScaleEnabled');
 const targetHeightCm = toRef(configStore, 'targetHeightCm');
@@ -55,12 +55,7 @@ const applyProjectSettings = (settings: ProjectSettings) => {
 const saveSettings = async () => {
   globalStore.setLoading(true);
   try {
-    await invoke('save_project_settings_command', {
-      request: {
-        path: settingsPath.value,
-        settings: toProjectSettings()
-      }
-    });
+    await projectSettings.saveSettings(settingsPath.value, toProjectSettings());
     notification.success(t('success_save_settings'));
   } catch (error) {
     notification.error(String(error));
@@ -72,9 +67,7 @@ const saveSettings = async () => {
 const loadSettings = async () => {
   globalStore.setLoading(true);
   try {
-    const settings = await invoke<ProjectSettings>('load_project_settings_command', {
-      request: { path: settingsPath.value }
-    });
+    const settings = await projectSettings.loadSettings(settingsPath.value);
     applyProjectSettings(settings);
     notification.success(t('success_load_settings'));
   } catch (error) {

@@ -20,7 +20,7 @@ const notices = computed(() => {
   }
 });
 
-// OS検出ß
+// OS検出
 onMounted(() => {
   detectPlatform();
 });
@@ -31,7 +31,7 @@ setupSeoMeta();
 
 <template>
   <v-card class="mb-6 bg-transparent mx-auto" flat tag="section" max-width="960">
-    <v-img :src="logo" alt="App Logo" contain class="mx-auto my-4" height="256px" />
+    <v-img :src="logo" alt="App Logo" cover class="mx-auto my-4" height="256px" />
     <v-card-title class="text-h4 text-center pa-3" tag="h2">
       {{ appName }}
     </v-card-title>

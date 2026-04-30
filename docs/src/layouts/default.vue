@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
+
 import { useTheme } from 'vuetify';
 
 import { useConfigStore } from '../store';

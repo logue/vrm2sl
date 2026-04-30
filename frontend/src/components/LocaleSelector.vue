@@ -17,6 +17,7 @@ function changeLocale(newLocale: string) {
   <v-menu location="bottom">
     <template #activator="{ props }">
       <v-btn v-bind="props" variant="plain" icon>
+        <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- mdi icon identifier, not translatable text -->
         <v-icon>mdi-translate</v-icon>
         <v-tooltip :text="t('locale')" activator="parent" location="bottom" />
       </v-btn>

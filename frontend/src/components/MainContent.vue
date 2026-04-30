@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
-
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { ref } from 'vue';
 
 import type { AnalysisReport, ConversionReport } from '@/interfaces';
 
@@ -9,36 +7,12 @@ import BoneMappingPanel from '@/components/panels/BoneMappingPanel.vue';
 import ConversionPanel from '@/components/panels/ConversionPanel.vue';
 import LogPanel from '@/components/panels/LogPanel.vue';
 import ValidationPanel from '@/components/panels/ValidationPanel.vue';
+import { useLogger } from '@/composables/useLogger';
 
 const analysis = ref<AnalysisReport | null>(null);
 const conversion = ref<ConversionReport | null>(null);
-const logs = ref<{ level: string; message: string; timestamp: string }[]>([]);
 
-let unlistenLogMessage: UnlistenFn | null = null;
-
-onMounted(async () => {
-  unlistenLogMessage = await listen<{ level: string; message: string; timestamp: string }>(
-    'log-message',
-    event => {
-      const payload = event.payload;
-      logs.value.push({
-        level: payload.level,
-        message: payload.message,
-        timestamp: payload.timestamp
-      });
-      if (logs.value.length > 200) {
-        logs.value.splice(0, logs.value.length - 200);
-      }
-    }
-  );
-});
-
-onBeforeUnmount(() => {
-  if (unlistenLogMessage) {
-    unlistenLogMessage();
-    unlistenLogMessage = null;
-  }
-});
+const { logs } = useLogger();
 </script>
 
 <template>
