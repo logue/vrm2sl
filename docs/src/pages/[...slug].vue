@@ -16,14 +16,14 @@ const slug = computed(() => {
   return normalizedPath || '/';
 });
 
-// キーを文字列で渡す（関数渡しは Nuxt 4 では IPC 競合の原因になる）。
-// i18n の prefix_except_default 戦略ではロケール切り替えが必ずルート変化を伴うため
-// watch: [locale] は不要。キーにロケールを含めれば SSG 時も別キャッシュになる。
+// Use a string key for useAsyncData (function keys can cause IPC contention in Nuxt 4).
+// With i18n prefix_except_default strategy, locale switching always changes routes,
+// so watch: [locale] is unnecessary when locale is included in the cache key.
 const { data: page } = await useAsyncData(`page-${locale.value}-${slug.value}`, async () => {
   const collection = `content_${locale.value}` as keyof Collections;
   const content = await queryCollection(collection).path(slug.value).first();
 
-  // 対象ロケールにコンテンツがなければ英語へフォールバック
+  // Fallback to English when localized content is unavailable.
   if (!content && locale.value !== 'en') {
     return await queryCollection('content_en').path(slug.value).first();
   }

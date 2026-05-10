@@ -1,25 +1,31 @@
 /**
- * Download links and OS detection composable
+ * Provides download link metadata and platform detection helpers.
+ *
+ * @returns Download metadata, detected platform refs, and helper functions.
  */
 export const useDownloads = () => {
   const { t } = useI18n();
   const config = useRuntimeConfig();
   const version = config.public.appVersion as string;
-  const appNameKebab = config.public.appNameKebab as string;
+  const appNameKebab = config.public.appNameKebab;
   const urlPrefix = `${import.meta.env.PROJECT_URL}/releases/download/${version}/${appNameKebab}_${version}_`;
 
-  // OS検出
+  // OS detection state.
   const detectedOS = ref<'windows' | 'macos' | 'linux' | 'unknown'>('unknown');
   const detectedArch = ref<'x64' | 'arm64' | 'unknown'>('unknown');
 
-  // クライアントサイドでのOS検出
+  /**
+   * Detects OS and CPU architecture on the client side.
+   *
+   * @returns Void.
+   */
   const detectPlatform = () => {
     if (!import.meta.client) return;
 
     const userAgent = navigator.userAgent.toLowerCase();
     const platform = navigator.platform.toLowerCase();
 
-    // OS検出
+    // OS detection.
     if (userAgent.includes('win')) {
       detectedOS.value = 'windows';
     } else if (userAgent.includes('mac')) {
@@ -28,7 +34,7 @@ export const useDownloads = () => {
       detectedOS.value = 'linux';
     }
 
-    // アーキテクチャ検出
+    // Architecture detection.
     if (platform.includes('arm') || platform.includes('aarch64') || userAgent.includes('arm64')) {
       detectedArch.value = 'arm64';
     } else if (platform.includes('x86') || platform.includes('x64') || platform.includes('amd64')) {
@@ -36,7 +42,7 @@ export const useDownloads = () => {
     }
   };
 
-  // ダウンロードリンク定義
+  // Download URL map by platform and architecture.
   const downloads = computed(() => ({
     windows: {
       x64: `${urlPrefix}x64_en-US.msi`
@@ -60,7 +66,7 @@ export const useDownloads = () => {
     }
   }));
 
-  // プライマリダウンロードボタンの情報
+  // Primary download button payload for current platform.
   const primaryDownload = computed(() => {
     const os = detectedOS.value;
     const arch = detectedArch.value;
@@ -94,7 +100,7 @@ export const useDownloads = () => {
       };
     }
 
-    // デフォルト（OS不明）
+    // Default fallback when platform detection is unavailable.
     return {
       label: t('download.download'),
       icon: 'mdi-download',

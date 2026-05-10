@@ -1,10 +1,12 @@
 /**
- * Content data composable for features
+ * Provides localized content helpers used by the landing page.
+ *
+ * @returns Feature metadata and normalized lead descriptions.
  */
 export const useContentData = () => {
   const { tm } = useI18n();
 
-  // 機能リスト
+  // Feature descriptor list used by cards and sections.
   const features = [
     {
       icon: 'mdi-package-variant',
@@ -32,7 +34,11 @@ export const useContentData = () => {
     }
   ];
 
-  // 型安全なdescriptionの取得
+  /**
+   * Safely resolves lead description entries from i18n messages.
+   *
+   * @returns Description lines as an array of strings.
+   */
   const leadDescriptions = computed(() => {
     try {
       const descriptions = tm('lead.description') as unknown;

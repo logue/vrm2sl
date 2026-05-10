@@ -43,7 +43,7 @@ const extractHeadings = () => {
     const text = element.textContent?.trim() || '';
     let id = element.id;
 
-    // IDが無い場合は生成
+    // Generate ID when missing.
     if (!id) {
       id = generateId(text);
       element.id = id;
@@ -77,16 +77,16 @@ const updateActiveHeading = () => {
 let observer: MutationObserver | null = null;
 
 onMounted(() => {
-  // 初回抽出
+  // Initial extraction.
   setTimeout(() => {
     extractHeadings();
     updateActiveHeading();
   }, 100);
 
-  // スクロールイベント
+  // Scroll event listener.
   window.addEventListener('scroll', updateActiveHeading);
 
-  // DOM変更を監視（動的コンテンツ対応）
+  // Observe DOM mutations for dynamic content updates.
   observer = new MutationObserver(() => {
     extractHeadings();
   });
@@ -108,7 +108,7 @@ onUnmounted(() => {
 <style scoped>
 .toc-drawer {
   position: fixed !important;
-  top: 64px !important; /* AppBar分のオフセット */
+  top: 64px !important; /* AppBar offset */
   height: calc(100vh - 64px) !important;
   overflow-y: auto;
 }

@@ -3,6 +3,7 @@
     "/^python3 /tmp/diag2\\.py 2>&1$/": {
       "approve": true,
       "matchCommandLine": true
-    }
+    },
+    "vue-tsc": true
   }
 }

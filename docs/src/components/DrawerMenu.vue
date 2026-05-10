@@ -16,8 +16,8 @@ const items: ComputedRef<DrawerMenuItem[]> = computed(() => [
   },
   {
     title: t('user-guide'),
-    icon: 'mdi-power',
-    to: localePath('/user-guide')
+    icon: 'mdi-power'
+    // to: localePath('/user-guide')
   },
   {
     title: t('publishing'),

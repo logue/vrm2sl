@@ -6,7 +6,6 @@ import markdown from '@eslint/markdown';
 import { globalIgnores } from 'eslint/config';
 import pluginImport from 'eslint-plugin-import-x';
 import pluginOxlint from 'eslint-plugin-oxlint';
-// @ts-ignore
 import pluginSecurity from 'eslint-plugin-security';
 import pluginVueA11y from 'eslint-plugin-vuejs-accessibility';
 import pluginVuetify from 'eslint-plugin-vuetify';
@@ -55,6 +54,7 @@ export default withNuxt(
   // ...pluginVueI18n.configs['flat/recommended'],
   pluginImport.flatConfigs.recommended,
   pluginImport.flatConfigs.typescript,
+  // @ts-ignore
   pluginSecurity.configs.recommended,
   ...markdown.configs.recommended,
   {

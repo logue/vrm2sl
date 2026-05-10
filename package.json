@@ -22,7 +22,7 @@
     "frontend",
     "docs"
   ],
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@11.0.9",
   "scripts": {
     "dev": "pnpm --filter frontend dev",
     "dev:tauri": "pnpm --filter frontend dev:tauri",
@@ -49,10 +49,51 @@
     "prepare": "husky",
     "postinstall": "pnpm --filter docs nuxt:prepare"
   },
-  "resolutions": {
-    "js-yaml": ">=4.1.1",
-    "vite": ">=8.0.10",
-    "unhead": ">=3.0.4",
-    "postcss": ">=8.5.12"
+  "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.7.1",
+    "@eslint/markdown": "^8.0.1",
+    "@intlify/eslint-plugin-vue-i18n": "^4.3.0",
+    "@types/node": "^25.6.2",
+    "@typescript-eslint/eslint-plugin": "^8.59.2",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "@vue/eslint-config-typescript": "^14.7.0",
+    "eslint": "^10.3.0",
+    "eslint-import-resolver-custom-alias": "^1.3.2",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import-x": "^4.16.2",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-oxlint": "^1.63.0",
+    "eslint-plugin-playwright": "^2.10.2",
+    "eslint-plugin-security": "^4.0.0",
+    "eslint-plugin-vue": "^10.9.1",
+    "eslint-plugin-vuejs-accessibility": "^2.5.0",
+    "eslint-plugin-vuetify": "^2.7.2",
+    "eslint-plugin-yml": "^3.3.2",
+    "husky": "^9.1.7",
+    "npm-run-all2": "^8.0.4",
+    "oxlint": "^1.63.0",
+    "postcss-html": "^1.8.1",
+    "prettier": "^3.8.3",
+    "rimraf": "^6.1.3",
+    "sass-embedded": "^1.99.0",
+    "stylelint": "^17.11.0",
+    "stylelint-config-html": "^1.1.0",
+    "stylelint-config-recommended-scss": "^17.0.1",
+    "stylelint-config-recommended-vue": "^1.6.1",
+    "stylelint-order": "^8.1.1",
+    "stylelint-scss": "^7.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.2",
+    "yaml-eslint-parser": "^2.0.0",
+    "lint-staged": "^17.0.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "js-yaml": "4.1.1",
+      "fast-xml-builder": "1.2.0",
+      "fast-uri": "3.1.2",
+      "unhead": "3.0.4",
+      "postcss": "8.5.12"
+    }
   }
 }

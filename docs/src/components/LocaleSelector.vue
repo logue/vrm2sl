@@ -4,7 +4,7 @@ import type { Locale } from '@/types/LocaleType';
 const { locale, locales } = useI18n();
 const switchLocalePath = useSwitchLocalePath();
 
-// TypeScript対応のためのキャスト
+// Cast for TypeScript compatibility.
 const availableLocales = computed(() =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (locales.value as any[]).filter((l: any) => l.code !== locale.value)

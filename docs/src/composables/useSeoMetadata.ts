@@ -1,5 +1,7 @@
 /**
- * SEO metadata and structured data composable
+ * Provides SEO metadata, hreflang links, and JSON-LD helpers.
+ *
+ * @returns Reactive SEO metadata builders and setup function.
  */
 import ogp from '@/assets/ogp.png';
 
@@ -8,13 +10,13 @@ export const useSeoMetadata = () => {
   const { version } = useDownloads();
   const config = useRuntimeConfig();
 
-  // サイトのベースURL（絶対URL）
+  // Absolute site base URL.
   const sitePath = computed(() => {
     const value = String(config.public.siteUrl || 'https://logue.dev');
     return value.replace(/\/+$/, '');
   });
 
-  // アプリのベースURL（パス）
+  // Application base path.
   const appBasePath = computed(() => {
     const value = String(config.public.appBaseUrl || '/');
     if (!value || value === '/') {
@@ -28,7 +30,7 @@ export const useSeoMetadata = () => {
     return new URL(normalizedPath, `${sitePath.value}/`).toString();
   });
 
-  // プロジェクトのベースURL
+  // Project repository base URL.
   const projectUrl = import.meta.env.PROJECT_URL || '/';
 
   const currentUrl = computed(() => {
@@ -36,12 +38,12 @@ export const useSeoMetadata = () => {
     return new URL(path, rootUrl.value).toString();
   });
 
-  // OGP画像
+  // OGP image URL.
   const ogImage = computed(() => {
     return new URL(ogp, rootUrl.value).toString();
   });
 
-  // 言語リスト定義
+  // Supported language descriptors.
   const languages = [
     { code: 'en', name: '🇺🇸 English' },
     { code: 'ja', name: '🇯🇵 日本語' },
@@ -51,18 +53,18 @@ export const useSeoMetadata = () => {
     { code: 'zhHant', name: '🇹🇼 繁體中文' }
   ];
 
-  // hreflangタグ
+  // hreflang link entries.
   const hreflangLinks = computed(() => {
     const links = [];
 
-    // x-default（英語）
+    // x-default (English root).
     links.push({
       rel: 'alternate',
       hreflang: 'x-default',
       href: rootUrl.value
     });
 
-    // 各言語
+    // Per-language entries.
     languages.forEach(lang => {
       if (lang.code === 'en') {
         links.push({
@@ -82,7 +84,7 @@ export const useSeoMetadata = () => {
     return links;
   });
 
-  // JSON-LD 構造化データ
+  // JSON-LD structured data payload.
   const jsonLdData = computed(() => {
     const languageMap: Record<string, string> = {
       ja: 'ja',
@@ -128,7 +130,11 @@ export const useSeoMetadata = () => {
     };
   });
 
-  // SEO メタデータの設定
+  /**
+   * Applies SEO meta tags and structured data to the current page.
+   *
+   * @returns Void.
+   */
   const setupSeoMeta = () => {
     useSeoMeta({
       title: computed(() => `Tauri Vue3 App - ${t('lead.subtitle')}`),

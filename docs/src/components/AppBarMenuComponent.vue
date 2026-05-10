@@ -5,7 +5,7 @@ const { t } = useI18n();
 /** Config Store */
 const configStore = useConfigStore();
 
-// import.meta.env はテンプレートで直接使えないので変数に取り出す
+// Extract import.meta.env value into a variable for template usage.
 const projectUrl = import.meta.env.PROJECT_URL as string | undefined;
 </script>
 

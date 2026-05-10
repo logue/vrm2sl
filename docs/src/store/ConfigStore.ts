@@ -1,49 +1,40 @@
 import { defineStore } from 'pinia';
-import { type Ref, ref, watch } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { type Ref, ref } from 'vue';
 
 /** Config Store */
 export default defineStore('config', () => {
-  // 1. i18nインスタンスからlocaleを取得
-  const { locale } = useI18n({ useScope: 'global' });
+  // 1. Initialize theme with a hydration-safe default (light mode).
+  // This value will be updated on client-side after hydration.
+  const theme: Ref<boolean> = ref(false);
 
-  // 2. Piniaのstateとして言語を定義（デフォルト値やlocalStorageからの復元など）
-  const currentLocale = ref(locale.value); // 初期値をi18nから拝借
-
-  // 3. stateが変更されたら、i18nのlocaleにも反映させる watchを設置
-  watch(currentLocale, newLocale => {
-    locale.value = newLocale;
-    // 必要ならlocalStorageに保存する処理もここに追加
-    // localStorage.setItem('locale', newLocale)
-  });
-
-  /** Dark Theme mode */
-  const theme: Ref<boolean> = ref(
-    import.meta.client && typeof window !== 'undefined'
-      ? window.matchMedia('(prefers-color-scheme: dark)').matches
-      : false
-  );
-
-  // クライアントサイドでの初期化
-  if (import.meta.client && typeof window !== 'undefined') {
-    // ハイドレーション後にダークモードの設定を確認
-    const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    theme.value = darkModeQuery.matches;
-
-    // システムのダークモード設定変更を監視
-    darkModeQuery.addEventListener('change', e => {
-      theme.value = e.matches;
-    });
-  }
+  // 2. Initialize locale as empty (will be set by components using useI18n).
+  const currentLocale = ref<string>('');
 
   /** Toggle Dark/Light mode */
   const toggleTheme = () => (theme.value = !theme.value);
+
   /**
    * Set Locale.
    *
-   * @param locale - Locale
+   * @param locale - Locale code
    */
-  const setLocale = (l: string) => (locale.value = l);
+  const setLocale = (locale: string) => (currentLocale.value = locale);
 
-  return { theme, locale, toggleTheme, setLocale };
+  /**
+   * Initialize theme from system preference (client-only).
+   */
+  const initializeTheme = () => {
+    if (import.meta.client && typeof window !== 'undefined') {
+      const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      // Set initial value from system preference.
+      theme.value = darkModeQuery.matches;
+
+      // Listen for system dark mode changes.
+      darkModeQuery.addEventListener('change', e => {
+        theme.value = e.matches;
+      });
+    }
+  };
+
+  return { theme, currentLocale, toggleTheme, setLocale, initializeTheme };
 });

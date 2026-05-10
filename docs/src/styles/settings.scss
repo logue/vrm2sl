@@ -17,14 +17,14 @@
   )
 );
 
-// グローバルなフォント設定を追加
+// Add global font settings.
 :root {
   font-family:
     'Noto Sans', 'Noto Sans JP', 'Noto Sans KR', 'Noto Sans TC', 'Noto Sans SC', 'Noto Color Emoji',
     sans-serif !important;
 }
 
-// 言語別フォント設定
+// Per-language font settings.
 html[lang='ja'],
 html[lang='ja'] * {
   font-family: 'Noto Sans JP', 'Noto Sans', 'Noto Color Emoji', sans-serif !important;
