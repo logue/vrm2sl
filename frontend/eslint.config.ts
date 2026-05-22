@@ -33,6 +33,7 @@ const GLOBAL_IGNORES = [
   '**/dist-ssr/**',
   '**/coverage/**',
   '.stylelintrc.yml',
+  '.stylelintrc.yaml',
   'src/locales/**'
 ];
 
