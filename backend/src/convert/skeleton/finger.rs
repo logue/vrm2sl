@@ -5,19 +5,13 @@ use nalgebra::{Matrix3, Matrix4, UnitQuaternion, Vector3, Vector4};
 use serde_json::Value;
 
 use super::super::gltf_utils::{
-    accessor_meta, collect_parent_index_map_from_json, compute_node_world_matrices, node_to_local_matrix,
-    read_joint_slot, read_weight_f32,
+    accessor_meta, collect_parent_index_map_from_json, compute_node_world_matrices,
+    node_to_local_matrix, read_joint_slot, read_weight_f32,
 };
 use super::super::types::{BENTO_BONE_MAP, BONE_MAP};
 
-fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
-    if matches!(
-        vrm_bone_name,
-        "leftEye" | "rightEye" | "leftHand" | "rightHand"
-    ) {
-        return true;
-    }
-
+/// Returns true when the VRM humanoid bone corresponds to a finger segment.
+fn is_vrm_finger_bone(vrm_bone_name: &str) -> bool {
     const FINGER_BASES: [&str; 10] = [
         "leftThumb",
         "leftIndex",
@@ -40,40 +34,78 @@ fn should_skip_rotation_normalization(vrm_bone_name: &str) -> bool {
     })
 }
 
-fn log_finger_transforms_for_debug(json: &Value) {
+/// Returns true when authored local rotation must be preserved.
+fn should_preserve_rotation(vrm_bone_name: &str) -> bool {
+    matches!(
+        vrm_bone_name,
+        "leftEye" | "rightEye" | "leftHand" | "rightHand"
+    ) || is_vrm_finger_bone(vrm_bone_name)
+}
+
+fn parse_quaternion_from_node(node: &Value) -> Option<UnitQuaternion<f32>> {
+    let rotation = node.get("rotation")?.as_array()?;
+    if rotation.len() != 4 {
+        return None;
+    }
+    let qx = rotation[0].as_f64().unwrap_or(0.0) as f32;
+    let qy = rotation[1].as_f64().unwrap_or(0.0) as f32;
+    let qz = rotation[2].as_f64().unwrap_or(0.0) as f32;
+    let qw = rotation[3].as_f64().unwrap_or(1.0) as f32;
+    Some(UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+        qw, qx, qy, qz,
+    )))
+}
+
+fn log_finger_euler_for_debug(label: &str, json: &Value) {
     if std::env::var("VRM2SL_DEBUG_FINGERS").is_err() {
         return;
     }
 
-    let finger_names = [
-        "mHandThumb1Left",
-        "mHandThumb2Left",
-        "mHandThumb3Left",
+    let tracked = [
         "mHandIndex1Left",
-        "mHandIndex2Left",
-        "mHandIndex3Left",
-        "mHandMiddle1Left",
-        "mHandMiddle2Left",
-        "mHandMiddle3Left",
-        "mHandRing1Left",
-        "mHandRing2Left",
-        "mHandRing3Left",
         "mHandPinky1Left",
-        "mHandPinky2Left",
-        "mHandPinky3Left",
+        "mHandIndex1Right",
+        "mHandPinky1Right",
     ];
 
     if let Some(nodes) = json.get("nodes").and_then(Value::as_array) {
         for node in nodes.iter() {
             if let Some(name) = node.get("name").and_then(Value::as_str) {
-                if finger_names.contains(&name) {
-                    let rot = node.get("rotation").and_then(Value::as_array).cloned();
-                    let trans = node.get("translation").and_then(Value::as_array).cloned();
-                    eprintln!(
-                        "[FINGER] {} rotation: {:?} translation: {:?}",
-                        name, rot, trans
-                    );
+                if !tracked.contains(&name) {
+                    continue;
                 }
+                let Some(q) = parse_quaternion_from_node(node) else {
+                    continue;
+                };
+                let (rx, ry, rz) = q.euler_angles();
+                eprintln!(
+                    "[FINGER/{label}] {name} local_euler_deg=({:.4}, {:.4}, {:.4})",
+                    rx.to_degrees(),
+                    ry.to_degrees(),
+                    rz.to_degrees()
+                );
+
+                let t = node.get("translation").and_then(Value::as_array);
+                let tx = t
+                    .and_then(|a| a.first())
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0) as f32;
+                let ty = t
+                    .and_then(|a| a.get(1))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0) as f32;
+                let tz = t
+                    .and_then(|a| a.get(2))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0) as f32;
+                let vec = Vector3::new(tx, ty, tz);
+                let curl = UnitQuaternion::from_euler_angles(30.0f32.to_radians(), 0.0, 0.0) * vec;
+                let palm_delta = (curl.y - vec.y).abs();
+                let lateral_delta = (curl.z - vec.z).abs();
+                eprintln!(
+                    "[FINGER/{label}] {name} x_curl_audit palm_delta={:.6} lateral_delta={:.6}",
+                    palm_delta, lateral_delta
+                );
             }
         }
     }
@@ -83,16 +115,18 @@ pub(in super::super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
 ) -> Vec<Matrix4<f32>> {
+    log_finger_euler_for_debug("before", json);
+
     let mapped_sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
-    let rotation_normalize_node_indices: HashSet<usize> = BONE_MAP
+    let preserve_rotation_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
-        .filter(|(vrm_name, _)| !should_skip_rotation_normalization(vrm_name))
+        .filter(|(vrm_name, _)| should_preserve_rotation(vrm_name))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
@@ -187,7 +221,7 @@ pub(in super::super) fn normalize_sl_bone_rotations(
         let world_offset = snapshot_t - parent_t;
         let local_t = parent_rot.inverse() * world_offset;
 
-        let will_normalize = rotation_normalize_node_indices.contains(&node_idx);
+        let will_normalize = !preserve_rotation_node_indices.contains(&node_idx);
 
         if let Some(obj) = json["nodes"][node_idx].as_object_mut() {
             obj.remove("matrix");
@@ -199,6 +233,8 @@ pub(in super::super) fn normalize_sl_bone_rotations(
             obj.insert("scale".to_string(), serde_json::json!([1.0, 1.0, 1.0]));
 
             if will_normalize {
+                // For Paper/open-hand stability, keep authored finger local
+                // rotations and only normalize non-finger mapped bones.
                 obj.insert(
                     "rotation".to_string(),
                     serde_json::json!([0.0, 0.0, 0.0, 1.0]),
@@ -210,7 +246,7 @@ pub(in super::super) fn normalize_sl_bone_rotations(
         effective_world[node_idx] = parent_world * local_after;
     }
 
-    log_finger_transforms_for_debug(json);
+    log_finger_euler_for_debug("after", json);
     node_worlds_snapshot
 }
 
@@ -268,7 +304,12 @@ pub(in super::super) fn correct_mesh_vertices_for_bind_pose_change(
 
         let slot_corrections: Vec<Matrix4<f32>> = joints
             .iter()
-            .map(|&ni| corrections.get(ni).copied().unwrap_or_else(Matrix4::identity))
+            .map(|&ni| {
+                corrections
+                    .get(ni)
+                    .copied()
+                    .unwrap_or_else(Matrix4::identity)
+            })
             .collect();
 
         let any_non_identity = slot_corrections.iter().any(|c| {

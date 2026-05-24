@@ -7,7 +7,11 @@ import { ref, type Ref } from 'vue';
 import * as THREE from 'three';
 import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 
-import { buildRetargetedClip, buildProceduralIdleClip } from './useBvhRetargeting';
+import {
+  buildRetargetedClip,
+  buildProceduralIdleClip,
+  buildProceduralRpsHandClip
+} from './useBvhRetargeting';
 
 import type { MotionMode } from './useVrmFile';
 
@@ -85,6 +89,10 @@ export function useAvatarAnimation({
       return;
     }
 
+    // Clear previous clip residue (especially fingers) so clips without
+    // full hand tracks do not inherit Paper/Scissors poses.
+    resetSkinnedMeshesToBindPose();
+
     disposeMixer();
     mixer = new THREE.AnimationMixer(modelRoot.value);
     const activeMixer = mixer;
@@ -96,13 +104,18 @@ export function useAvatarAnimation({
 
     for (const skinnedMesh of skinnedMeshes) {
       const retargeted = bvhMotionClip
-        ? buildRetargetedClip(bvhMotionClip, skinnedMesh.skeleton)
+        ? buildRetargetedClip(bvhMotionClip, skinnedMesh.skeleton, {
+            sourceMotionPath: currentMotionPath.value
+          })
+        : null;
+      const proceduralRpsHand = bvhMotionClip
+        ? buildProceduralRpsHandClip(skinnedMesh.skeleton, currentMotionPath.value)
         : null;
       const proceduralIdle = allowProceduralIdle
         ? buildProceduralIdleClip(skinnedMesh.skeleton)
         : null;
 
-      if (!retargeted && !proceduralIdle) {
+      if (!retargeted && !proceduralIdle && !proceduralRpsHand) {
         continue;
       }
 
@@ -123,6 +136,10 @@ export function useAvatarAnimation({
 
       if (retargeted) {
         playClip(retargeted, proceduralIdle ? 0.85 : 1);
+      }
+      if (proceduralRpsHand) {
+        // RPS helper only affects right-hand finger bones.
+        playClip(proceduralRpsHand, 1);
       }
       if (proceduralIdle) {
         proceduralApplied = true;
@@ -212,6 +229,12 @@ export function useAvatarAnimation({
    * otherwise load it first then apply.
    */
   const applyOrLoadAnimation = async () => {
+    // Always clear previous pose/action before switching clips. This prevents
+    // static hand poses (e.g. Paper) from sticking when the next clip has
+    // partial hand/finger tracks or while BVH is loading.
+    disposeMixer();
+    resetSkinnedMeshesToBindPose();
+
     bvhMotionClip = bvhClipCache.get(currentMotionPath.value) ?? null;
     if (bvhMotionClip) {
       applyIdleAnimation();

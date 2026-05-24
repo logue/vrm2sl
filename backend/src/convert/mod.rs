@@ -815,7 +815,7 @@ fn apply_texture_resize_to_embedded_images(
 mod tests {
     use std::collections::HashMap;
 
-    use nalgebra::Vector3;
+    use nalgebra::{UnitQuaternion, Vector3};
     use serde_json::Value;
 
     use super::gltf_utils::{
@@ -1010,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn given_non_thumb_finger_bone_when_normalizing_then_local_rotation_is_preserved() {
+    fn given_non_thumb_finger_proximal_when_normalizing_then_local_rotation_is_preserved() {
         let original_rotation = vec![
             Value::from(0.0),
             Value::from(0.12),
@@ -1130,6 +1130,82 @@ mod tests {
                 Value::from(0.99)
             ]
         );
+    }
+
+    #[test]
+    fn given_non_thumb_finger_intermediate_when_normalizing_then_local_rotation_is_preserved() {
+        let original_rotation = vec![
+            Value::from(0.0),
+            Value::from(0.12),
+            Value::from(-0.04),
+            Value::from(0.99),
+        ];
+
+        let mut input_json = serde_json::json!({
+            "nodes": [
+                {
+                    "name": "mHandIndex2Left",
+                    "rotation": [0.0, 0.12, -0.04, 0.99],
+                    "translation": [0.04, 0.01, -0.02],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            ]
+        });
+
+        let humanoid = HashMap::from([("leftIndexIntermediate".to_string(), 0usize)]);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+
+        let rotation = input_json
+            .pointer("/nodes/0/rotation")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(rotation, original_rotation);
+    }
+
+    fn extract_bvh_joint_offset(bvh: &str, joint_name: &str) -> Option<Vector3<f32>> {
+        let marker = format!("JOINT {joint_name}");
+        let lines: Vec<&str> = bvh.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.trim().starts_with(&marker) {
+                continue;
+            }
+            for probe in lines.iter().skip(index + 1).take(8) {
+                let trimmed = probe.trim();
+                if let Some(rest) = trimmed.strip_prefix("OFFSET ") {
+                    let values: Vec<f32> = rest
+                        .split_whitespace()
+                        .filter_map(|value| value.parse::<f32>().ok())
+                        .collect();
+                    if values.len() == 3 {
+                        return Some(Vector3::new(values[0], values[1], values[2]));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn given_reference_hand_bvh_when_applying_pure_x_rotation_then_curl_is_palmward() {
+        let bvh = include_str!("../../../bvh/Hand_L Stone;,1,2,1-1,0.2-0.2;L.bvh");
+        let index2 = extract_bvh_joint_offset(bvh, "mHandIndex2Left")
+            .expect("mHandIndex2Left should exist in reference BVH");
+        let pinky2 = extract_bvh_joint_offset(bvh, "mHandPinky2Left")
+            .expect("mHandPinky2Left should exist in reference BVH");
+
+        let curl = UnitQuaternion::from_euler_angles(35.0f32.to_radians(), 0.0, 0.0);
+
+        for sample in [index2, pinky2] {
+            let rotated = curl * sample;
+            let palmward = (rotated.y - sample.y).abs();
+            let lateral = (rotated.z - sample.z).abs();
+            assert!(
+                palmward > lateral,
+                "pure X curl must move toward palm more than sideways: palmward={palmward}, lateral={lateral}"
+            );
+        }
     }
 
     #[test]
