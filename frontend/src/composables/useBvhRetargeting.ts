@@ -348,7 +348,7 @@ export function detectRpsPoseName(sourceMotionPath?: string): RpsPoseName | null
 }
 
 /**
- * Build a static right-hand finger pose clip for RPS preview.
+ * Build a static both-hands finger pose clip for RPS preview.
  * This is used when official RPS BVH files do not include finger tracks.
  */
 export function buildProceduralRpsHandClip(
@@ -361,15 +361,9 @@ export function buildProceduralRpsHandClip(
   }
 
   const times = [0, 1];
-  const closed: FingerEuler = { x: 75, y: 0, z: 0 };
-  const halfClosed: FingerEuler = { x: 45, y: 0, z: 0 };
+  const closed: FingerEuler = { x: 55, y: 0, z: 0 };
+  const halfClosed: FingerEuler = { x: 30, y: 0, z: 0 };
   const open: FingerEuler = { x: 0, y: 0, z: 0 };
-  const thumbCurl1: FingerEuler = { x: 4, y: 14, z: -26 };
-  const thumbCurl2: FingerEuler = { x: 7, y: 10, z: -20 };
-  const thumbCurl3: FingerEuler = { x: 6, y: 7, z: -14 };
-  const thumbSemiCurl1: FingerEuler = { x: -4, y: 12, z: -24 };
-  const thumbSemiCurl2: FingerEuler = { x: -2, y: 9, z: -18 };
-  const thumbSemiCurl3: FingerEuler = { x: -1, y: 6, z: -13 };
 
   const byPose: Record<RpsPoseName, Record<string, FingerEuler>> = {
     paper: {
@@ -384,12 +378,21 @@ export function buildProceduralRpsHandClip(
       mHandRing3Right: open,
       mHandPinky1Right: open,
       mHandPinky2Right: open,
-      mHandPinky3Right: open
+      mHandPinky3Right: open,
+      mHandIndex1Left: open,
+      mHandIndex2Left: open,
+      mHandIndex3Left: open,
+      mHandMiddle1Left: open,
+      mHandMiddle2Left: open,
+      mHandMiddle3Left: open,
+      mHandRing1Left: open,
+      mHandRing2Left: open,
+      mHandRing3Left: open,
+      mHandPinky1Left: open,
+      mHandPinky2Left: open,
+      mHandPinky3Left: open
     },
     rock: {
-      mHandThumb1Right: thumbCurl1,
-      mHandThumb2Right: thumbCurl2,
-      mHandThumb3Right: thumbCurl3,
       mHandIndex1Right: closed,
       mHandIndex2Right: closed,
       mHandIndex3Right: halfClosed,
@@ -401,12 +404,21 @@ export function buildProceduralRpsHandClip(
       mHandRing3Right: halfClosed,
       mHandPinky1Right: closed,
       mHandPinky2Right: closed,
-      mHandPinky3Right: halfClosed
+      mHandPinky3Right: halfClosed,
+      mHandIndex1Left: closed,
+      mHandIndex2Left: closed,
+      mHandIndex3Left: halfClosed,
+      mHandMiddle1Left: closed,
+      mHandMiddle2Left: closed,
+      mHandMiddle3Left: halfClosed,
+      mHandRing1Left: closed,
+      mHandRing2Left: closed,
+      mHandRing3Left: halfClosed,
+      mHandPinky1Left: closed,
+      mHandPinky2Left: closed,
+      mHandPinky3Left: halfClosed
     },
     scissors: {
-      mHandThumb1Right: thumbSemiCurl1,
-      mHandThumb2Right: thumbSemiCurl2,
-      mHandThumb3Right: thumbSemiCurl3,
       mHandIndex1Right: open,
       mHandIndex2Right: open,
       mHandIndex3Right: open,
@@ -418,7 +430,19 @@ export function buildProceduralRpsHandClip(
       mHandRing3Right: halfClosed,
       mHandPinky1Right: closed,
       mHandPinky2Right: closed,
-      mHandPinky3Right: halfClosed
+      mHandPinky3Right: halfClosed,
+      mHandIndex1Left: open,
+      mHandIndex2Left: open,
+      mHandIndex3Left: open,
+      mHandMiddle1Left: open,
+      mHandMiddle2Left: open,
+      mHandMiddle3Left: open,
+      mHandRing1Left: closed,
+      mHandRing2Left: closed,
+      mHandRing3Left: halfClosed,
+      mHandPinky1Left: closed,
+      mHandPinky2Left: closed,
+      mHandPinky3Left: halfClosed
     }
   };
 

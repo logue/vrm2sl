@@ -18,20 +18,20 @@ name = "vrm2sl_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.1", features = [] }
+tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
 anyhow = "1.0.102"
 base64 = "0.22.1"
 gltf = { version = "1.4.1", features = ["import", "names"] }
-nalgebra = "0.34.2"
+nalgebra = "0.35.0"
 image = "0.25.10"
 serde = "1.0.228"
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 thiserror = "2.0.18"
-jiff = { version = "0.2.24", features = ["serde"] }
+jiff = { version = "0.2.28", features = ["serde"] }
 
-tauri = { version = "2.11.1", features = [] }
+tauri = { version = "2.11.2", features = [] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-log = "2.8.0"
