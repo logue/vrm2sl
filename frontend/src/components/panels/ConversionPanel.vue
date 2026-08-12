@@ -36,6 +36,17 @@ const textureResizeMethod = toRef(configStore, 'textureResizeMethod');
 const face = toRef(configStore, 'face');
 const fingers = toRef(configStore, 'fingers');
 
+/**
+ * Finger test-pose options. Values match the four hand poses we ship as
+ * companion BVHs (open=do-nothing, fist=rock, scissors, paper).
+ */
+const fingerTestPoseItems = computed(() => [
+  { title: t('finger_pose_open'), value: 'open' },
+  { title: t('finger_pose_fist'), value: 'fist' },
+  { title: t('finger_pose_scissors'), value: 'scissors' },
+  { title: t('finger_pose_paper'), value: 'paper' }
+]);
+
 const notification = useNotification(t);
 const fs = useFileSystem();
 const conversionApi = useConversion();
@@ -268,7 +279,7 @@ onMounted(async () => {
               <v-switch v-model="fingers.enabled" :label="t('fingers_enabled')" />
               <v-select
                 v-model="fingers.test_pose"
-                :items="['open', 'fist']"
+                :items="fingerTestPoseItems"
                 :label="t('fingers_test_pose')"
               />
             </v-col>
@@ -321,6 +332,10 @@ en:
   lip_open_angle: Mouth Open Angle
   fingers_enabled: Finger Check ON
   fingers_test_pose: Finger Test Pose
+  finger_pose_open: Open
+  finger_pose_fist: Rock (Fist)
+  finger_pose_scissors: Scissors
+  finger_pose_paper: Paper
   converted: 'Converted: {path}'
   output_tex_max_over: 'Post-conv. texture max side: {max}px / Over 1024px (post): {over}'
   current_setting: 'Current setting:'
@@ -349,6 +364,10 @@ fr:
   lip_open_angle: "Angle d'ouverture buccale"
   fingers_enabled: Vérification des doigts activée
   fingers_test_pose: Pose de test des doigts
+  finger_pose_open: Ouverte
+  finger_pose_fist: Pierre (Poing)
+  finger_pose_scissors: Ciseaux
+  finger_pose_paper: Feuille
   converted: 'Converti: {path}'
   output_tex_max_over: 'Côté max texture (post-conv.): {max}px / >1024px (post): {over}'
   current_setting: 'Paramètre actuel:'
@@ -377,6 +396,10 @@ ja:
   lip_open_angle: 開口角度
   fingers_enabled: 指確認ON
   fingers_test_pose: 指テストポーズ
+  finger_pose_open: 開く
+  finger_pose_fist: グー
+  finger_pose_scissors: チョキ
+  finger_pose_paper: パー
   converted: '変換済み: {path}'
   output_tex_max_over: '変換後テクスチャ最大辺: {max}px / 1024px超過(変換後): {over}'
   current_setting: '現在の設定:'
@@ -405,6 +428,10 @@ ko:
   lip_open_angle: 입 개방 각도
   fingers_enabled: 손가락 확인 ON
   fingers_test_pose: 손가락 테스트 포즈
+  finger_pose_open: 펴기
+  finger_pose_fist: 바위 (주먹)
+  finger_pose_scissors: 가위
+  finger_pose_paper: 보
   converted: '변환 완료: {path}'
   output_tex_max_over: '변환 후 텍스처 최대 변: {max}px / 1024px 초과(변환 후): {over}'
   current_setting: '현재 설정:'
@@ -433,6 +460,10 @@ zhHant:
   lip_open_angle: 張口角度
   fingers_enabled: 手指確認 ON
   fingers_test_pose: 手指測試姿勢
+  finger_pose_open: 張開
+  finger_pose_fist: 石頭 (拳)
+  finger_pose_scissors: 剪刀
+  finger_pose_paper: 布
   converted: '已轉換: {path}'
   output_tex_max_over: '轉換後貼圖最大邊: {max}px / 超過1024px(轉換後): {over}'
   current_setting: '目前設定:'
@@ -461,6 +492,10 @@ zhHans:
   lip_open_angle: 张口角度
   fingers_enabled: 手指确认 ON
   fingers_test_pose: 手指测试姿势
+  finger_pose_open: 张开
+  finger_pose_fist: 石头 (拳)
+  finger_pose_scissors: 剪刀
+  finger_pose_paper: 布
   converted: '已转换: {path}'
   output_tex_max_over: '转换后贴图最大边: {max}px / 超过1024px(转换后): {over}'
   current_setting: '当前设置:'

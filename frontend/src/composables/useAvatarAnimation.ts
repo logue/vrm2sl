@@ -2,7 +2,7 @@
 // scoped <i18n> block (VrmPreview.vue). The @intlify plugin only knows about
 // global resources and therefore reports the keys as missing. The keys are
 // correct at runtime; the plugin cannot resolve component-scoped i18n blocks.
-import { ref, type Ref } from 'vue';
+import { ref, watch, type Ref } from 'vue';
 
 import * as THREE from 'three';
 import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
@@ -10,7 +10,7 @@ import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
 import {
   buildRetargetedClip,
   buildProceduralIdleClip,
-  buildProceduralRpsHandClip
+  buildFingerOnlyRetargetedClip
 } from './useBvhRetargeting';
 
 import type { MotionMode } from './useVrmFile';
@@ -22,11 +22,21 @@ import { formatPreviewMotionTitle } from '@/constants/previewAnimations';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- component-scoped i18n blocks are not visible to the type plugin
 type TFunction = (key: any, params?: any) => string;
 
+/**
+ * Finger test-pose settings forwarded from ConfigStore.fingers.
+ * `enabled`: whether the test-pose overlay is active in preview.
+ * `test_pose`: 'open' | 'fist' | 'scissors' | 'paper'.
+ *   - 'open' leaves fingers driven by the active motion clip
+ *   - others apply the matching SL stock hand-pose BVH on top of the motion
+ */
+export type FingerTestPose = 'open' | 'fist' | 'scissors' | 'paper';
+
 export interface UseAvatarAnimationOptions {
   modelRoot: Ref<THREE.Object3D | null>;
   animationEnabled: Ref<boolean>;
   selectedMotionMode: Ref<MotionMode>;
   currentMotionPath: Ref<string>;
+  fingerTestSettings?: Ref<{ enabled: boolean; test_pose: string }>;
   t: TFunction;
 }
 
@@ -35,6 +45,7 @@ export function useAvatarAnimation({
   animationEnabled,
   selectedMotionMode,
   currentMotionPath,
+  fingerTestSettings,
   t
 }: UseAvatarAnimationOptions) {
   const animationStatus = ref('');
@@ -42,6 +53,46 @@ export function useAvatarAnimation({
   let bvhMotionClip: THREE.AnimationClip | null = null;
   let mixer: THREE.AnimationMixer | null = null;
   const bvhClipCache: Map<string, THREE.AnimationClip> = new Map();
+
+  // Cache for finger-pose companion BVHs (left/right) keyed by their public path.
+  let fingerLeftClip: THREE.AnimationClip | null = null;
+  let fingerRightClip: THREE.AnimationClip | null = null;
+
+  /**
+   * Resolve the companion finger-pose BVH paths.
+   *
+   * Priority:
+   * 1. If the active motion is an RPS BVH, use the matching RPS pose.
+   * 2. Otherwise, if finger-test overlay is enabled and the pose is not
+   *    'open', use the matching test pose.
+   * 3. Returns null when no finger overlay is desired.
+   */
+  const resolveFingerCompanionPaths = (
+    motionPath: string
+  ): { left: string; right: string } | null => {
+    const lower = motionPath.toLowerCase();
+    let pose: 'paper' | 'rock' | 'scissors' | null = null;
+    if (lower.includes('avatar_rps_paper')) {
+      pose = 'paper';
+    } else if (lower.includes('avatar_rps_rock')) {
+      pose = 'rock';
+    } else if (lower.includes('avatar_rps_scissors')) {
+      pose = 'scissors';
+    }
+
+    if (!pose && fingerTestSettings?.value.enabled) {
+      const tp = fingerTestSettings.value.test_pose;
+      if (tp === 'fist') pose = 'rock';
+      else if (tp === 'scissors') pose = 'scissors';
+      else if (tp === 'paper') pose = 'paper';
+    }
+
+    if (!pose) return null;
+    return {
+      left: `/animations/finger_${pose}_left.bvh`,
+      right: `/animations/finger_${pose}_right.bvh`
+    };
+  };
 
   const collectSkinnedMeshes = (root: THREE.Object3D): THREE.SkinnedMesh[] => {
     const meshes: THREE.SkinnedMesh[] = [];
@@ -108,14 +159,43 @@ export function useAvatarAnimation({
             sourceMotionPath: currentMotionPath.value
           })
         : null;
-      const proceduralRpsHand = bvhMotionClip
-        ? buildProceduralRpsHandClip(skinnedMesh.skeleton, currentMotionPath.value)
-        : null;
       const proceduralIdle = allowProceduralIdle
         ? buildProceduralIdleClip(skinnedMesh.skeleton)
         : null;
+      const fingerLeftSource = fingerLeftClip;
+      const fingerLeft = fingerLeftSource
+        ? (() => {
+            try {
+              return buildFingerOnlyRetargetedClip(
+                fingerLeftSource,
+                skinnedMesh.skeleton,
+                'avatar_finger_pose_left',
+                'left'
+              );
+            } catch (e) {
+              console.error('[finger overlay] left build failed', e);
+              return null;
+            }
+          })()
+        : null;
+      const fingerRightSource = fingerRightClip;
+      const fingerRight = fingerRightSource
+        ? (() => {
+            try {
+              return buildFingerOnlyRetargetedClip(
+                fingerRightSource,
+                skinnedMesh.skeleton,
+                'avatar_finger_pose_right',
+                'right'
+              );
+            } catch (e) {
+              console.error('[finger overlay] right build failed', e);
+              return null;
+            }
+          })()
+        : null;
 
-      if (!retargeted && !proceduralIdle && !proceduralRpsHand) {
+      if (!retargeted && !proceduralIdle && !fingerLeft && !fingerRight) {
         continue;
       }
 
@@ -137,13 +217,17 @@ export function useAvatarAnimation({
       if (retargeted) {
         playClip(retargeted, proceduralIdle ? 0.85 : 1);
       }
-      if (proceduralRpsHand) {
-        // RPS helper only affects right-hand finger bones.
-        playClip(proceduralRpsHand, 1);
-      }
       if (proceduralIdle) {
         proceduralApplied = true;
         playClip(proceduralIdle, retargeted ? 0.35 : 1);
+      }
+      // Finger-pose companions override only mHand* finger bones; play at full
+      // weight so they cleanly drive the hand pose alongside the main clip.
+      if (fingerLeft) {
+        playClip(fingerLeft, 1);
+      }
+      if (fingerRight) {
+        playClip(fingerRight, 1);
       }
     }
 
@@ -191,8 +275,41 @@ export function useAvatarAnimation({
     animationStatus.value = t('status_stopped');
   };
 
+  const loadFingerCompanionClips = async (motionPath: string) => {
+    const paths = resolveFingerCompanionPaths(motionPath);
+    if (!paths) {
+      fingerLeftClip = null;
+      fingerRightClip = null;
+      return;
+    }
+
+    const loadOne = async (path: string): Promise<THREE.AnimationClip | null> => {
+      const cached = bvhClipCache.get(path);
+      if (cached) {
+        return cached;
+      }
+      try {
+        const loader = new BVHLoader();
+        const result = await loader.loadAsync(path);
+        bvhClipCache.set(path, result.clip);
+        return result.clip;
+      } catch (e) {
+        console.error('[finger companion] load failed', path, e);
+        return null;
+      }
+    };
+
+    const [left, right] = await Promise.all([loadOne(paths.left), loadOne(paths.right)]);
+    fingerLeftClip = left;
+    fingerRightClip = right;
+  };
+
   const loadSelectedBvh = async () => {
     const motionPath = currentMotionPath.value;
+
+    // Step 1: load the main motion BVH. Only this step is allowed to flip the
+    // status to `status_bvh_failed`; downstream finger overlay or apply
+    // failures must never blank out the main motion clip.
     try {
       const cached = bvhClipCache.get(motionPath);
       if (cached) {
@@ -211,16 +328,35 @@ export function useAvatarAnimation({
           frames: Math.max(...result.clip.tracks.map(track => track.times.length), 0)
         });
       }
-
-      if (modelRoot.value && animationEnabled.value) {
-        applyIdleAnimation();
-      }
     } catch (error) {
       bvhMotionClip = null;
+      fingerLeftClip = null;
+      fingerRightClip = null;
       animationStatus.value = t('status_bvh_failed', {
         path: motionPath,
         error: String(error)
       });
+      return;
+    }
+
+    // Step 2: load finger-pose companions. Failures here are non-fatal and
+    // must not affect the main motion clip nor the status message.
+    try {
+      await loadFingerCompanionClips(motionPath);
+    } catch (error) {
+      console.error('[finger companion] outer load failed', error);
+      fingerLeftClip = null;
+      fingerRightClip = null;
+    }
+
+    // Step 3: apply the animation. Errors here are logged but must not change
+    // the status to `status_bvh_failed`, because the main motion clip is OK.
+    if (modelRoot.value && animationEnabled.value) {
+      try {
+        applyIdleAnimation();
+      } catch (error) {
+        console.error('[animation apply] failed', error);
+      }
     }
   };
 
@@ -235,8 +371,14 @@ export function useAvatarAnimation({
     disposeMixer();
     resetSkinnedMeshesToBindPose();
 
+    // Reset finger-pose companions; loaders below repopulate them when the
+    // new motion is an RPS pose.
+    fingerLeftClip = null;
+    fingerRightClip = null;
+
     bvhMotionClip = bvhClipCache.get(currentMotionPath.value) ?? null;
     if (bvhMotionClip) {
+      await loadFingerCompanionClips(currentMotionPath.value);
       applyIdleAnimation();
     } else {
       await loadSelectedBvh();
@@ -247,6 +389,20 @@ export function useAvatarAnimation({
   const tickMixer = (delta: number) => {
     mixer?.update(delta);
   };
+
+  // React to finger test-pose changes so the preview updates live without
+  // requiring the user to reselect a motion.
+  if (fingerTestSettings) {
+    watch(
+      () => [fingerTestSettings.value.enabled, fingerTestSettings.value.test_pose] as const,
+      () => {
+        if (!modelRoot.value || !animationEnabled.value) {
+          return;
+        }
+        void applyOrLoadAnimation();
+      }
+    );
+  }
 
   return {
     animationStatus,

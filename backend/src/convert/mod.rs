@@ -36,9 +36,10 @@ use material::{
     validate_and_fix_texture_references,
 };
 use skeleton::{
-    ensure_target_bones_exist_after_rename, normalize_sl_bone_rotations,
-    promote_pelvis_to_scene_root, reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices,
-    rename_bones, set_skin_skeleton_root, validate_bone_conversion_preconditions,
+    correct_mesh_vertices_for_bind_pose_change, ensure_target_bones_exist_after_rename,
+    finger_normalization_enabled, normalize_sl_bone_rotations, promote_pelvis_to_scene_root,
+    reconstruct_sl_core_hierarchy, regenerate_inverse_bind_matrices, rename_bones,
+    set_skin_skeleton_root, validate_bone_conversion_preconditions,
 };
 use skinning::{
     cleanup_cross_finger_family_weights, collapse_secondary_head_skins_to_primary,
@@ -371,12 +372,24 @@ fn transform_and_write_glb(
     // orientations in the SL skeleton; any non-identity rotation baked into
     // the node hierarchy will therefore cause incorrect deformation.
     let pre_normalization_worlds = normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
-    // NOTE:
-    // Some SL runtimes appear to handle bind/rest rotations differently from
-    // standard glTF skinning. Applying this correction can over-deform hands
-    // during Bento animations on certain VRoid sources, so keep it disabled
-    // for now while preserving joint/IBM regeneration below.
-    let _ = pre_normalization_worlds;
+
+    // Stage-C opt-in: when finger bone bind-pose normalization is enabled
+    // (via env `VRM2SL_NORMALIZE_FINGERS`), the authored finger rotations are
+    // also reset to identity above.  This shifts the bind pose of every finger
+    // joint, so the skinned mesh vertices must be transformed by the same
+    // delta to keep the rest-pose hand visually unchanged; otherwise fingers
+    // visibly stretch / collapse on the exported avatar.
+    //
+    // Wrist / non-finger bones still use the previous "preserve rotation"
+    // path (see `should_preserve_rotation`), and this correction safely
+    // operates on the full skinned weight blend so it does not regress them.
+    if finger_normalization_enabled() {
+        correct_mesh_vertices_for_bind_pose_change(&json, &mut bin, &pre_normalization_worlds)?;
+    } else {
+        // Legacy behaviour: skip mesh correction because fingers retained
+        // their authored rotation, so no bind-pose delta exists for them.
+        let _ = pre_normalization_worlds;
+    }
     // Remap chest/head-adjacent secondary helpers that SL ignores in preview
     // so upperChest/bust chains do not collapse the torso before upload.
     // Hand-side helpers remain untouched to avoid reintroducing finger issues.

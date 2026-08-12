@@ -35,11 +35,38 @@ fn is_vrm_finger_bone(vrm_bone_name: &str) -> bool {
 }
 
 /// Returns true when authored local rotation must be preserved.
-fn should_preserve_rotation(vrm_bone_name: &str) -> bool {
-    matches!(
+///
+/// Eyes and wrist are always preserved because their authored basis is
+/// required for correct gaze/wrist deformation in SL.
+///
+/// Fingers are preserved only when finger normalization is disabled (legacy
+/// behavior).  When [`finger_normalization_enabled`] returns true, fingers
+/// fall through to identity-rotation normalization, and the caller must run
+/// [`correct_mesh_vertices_for_bind_pose_change`] to compensate the bind-pose
+/// change on the skinned mesh; otherwise fingers will visibly stretch.
+fn should_preserve_rotation(vrm_bone_name: &str, normalize_fingers: bool) -> bool {
+    if matches!(
         vrm_bone_name,
         "leftEye" | "rightEye" | "leftHand" | "rightHand"
-    ) || is_vrm_finger_bone(vrm_bone_name)
+    ) {
+        return true;
+    }
+    if is_vrm_finger_bone(vrm_bone_name) {
+        return !normalize_fingers;
+    }
+    false
+}
+
+/// Stage-C opt-in: enable SL bind-pose normalization for finger bones plus
+/// the companion skinned-vertex correction.  Controlled by the environment
+/// variable `VRM2SL_NORMALIZE_FINGERS`.
+///
+/// Accepts truthy values: anything other than empty / `0` / `false` / `off`.
+pub(in super::super) fn finger_normalization_enabled() -> bool {
+    match std::env::var("VRM2SL_NORMALIZE_FINGERS") {
+        Ok(v) => !matches!(v.to_ascii_lowercase().as_str(), "" | "0" | "false" | "off"),
+        Err(_) => false,
+    }
 }
 
 fn parse_quaternion_from_node(node: &Value) -> Option<UnitQuaternion<f32>> {
@@ -117,6 +144,8 @@ pub(in super::super) fn normalize_sl_bone_rotations(
 ) -> Vec<Matrix4<f32>> {
     log_finger_euler_for_debug("before", json);
 
+    let normalize_fingers = finger_normalization_enabled();
+
     let mapped_sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
@@ -126,7 +155,7 @@ pub(in super::super) fn normalize_sl_bone_rotations(
     let preserve_rotation_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
-        .filter(|(vrm_name, _)| should_preserve_rotation(vrm_name))
+        .filter(|(vrm_name, _)| should_preserve_rotation(vrm_name, normalize_fingers))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 
@@ -250,7 +279,6 @@ pub(in super::super) fn normalize_sl_bone_rotations(
     node_worlds_snapshot
 }
 
-#[allow(dead_code)]
 pub(in super::super) fn correct_mesh_vertices_for_bind_pose_change(
     json: &Value,
     bin: &mut [u8],
@@ -459,7 +487,6 @@ pub(in super::super) fn correct_mesh_vertices_for_bind_pose_change(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn blend_correction_matrix(
     bin: &[u8],
     jnt_meta: &super::super::gltf_utils::AccessorMeta,
@@ -493,7 +520,6 @@ fn blend_correction_matrix(
     result / total_weight
 }
 
-#[allow(dead_code)]
 struct PrimitiveBindingWithAttributes {
     joints_accessor: usize,
     weights_accessor: usize,
@@ -501,7 +527,6 @@ struct PrimitiveBindingWithAttributes {
     normal_accessor: Option<usize>,
 }
 
-#[allow(dead_code)]
 fn collect_primitives_for_skin_with_attributes(
     json: &Value,
     skin_index: usize,

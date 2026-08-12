@@ -7,9 +7,6 @@ export type IdleBoneMotion = {
   zAngles: number[];
 };
 
-type RpsPoseName = 'paper' | 'rock' | 'scissors';
-type FingerEuler = { x: number; y: number; z: number };
-
 /** BVH joint name → Second Life bone name mapping. */
 export const BVH_TO_SL_BONE: Record<string, string> = {
   hip: 'mPelvis',
@@ -240,6 +237,110 @@ export function buildRetargetedClip(
 }
 
 /**
+ * Build a "finger-only" clip from a hand-pose BVH (e.g. the SL stock
+ * `Hand_L Paper;,...;L.bvh` / `Hand_R Scissors;,...;L.bvh` files).
+ *
+ * The source BVH carries the full SL Bento skeleton, but for preview we only
+ * want the `mHand*` finger tracks so that the upper-body / wrist motion of
+ * the active RPS clip continues to drive the avatar.  Wrist itself and all
+ * non-finger bones are dropped here.
+ *
+ * The SL stock hand BVHs include BOTH left and right finger bones (the
+ * inactive side has identity rotations). Playing the left- and right-hand
+ * clips simultaneously would therefore produce two competing tracks for
+ * every finger bone, which AnimationMixer blends and renders as a high-
+ * frequency vibration. Pass `sideFilter` ('left' | 'right') to keep only
+ * the matching side's tracks and avoid the conflict.
+ *
+ * Returns null when the source BVH has no usable finger tracks for the target
+ * skeleton.
+ */
+export function buildFingerOnlyRetargetedClip(
+  sourceClip: THREE.AnimationClip,
+  targetSkeleton: THREE.Skeleton,
+  clipName = 'avatar_finger_pose',
+  sideFilter?: 'left' | 'right'
+): THREE.AnimationClip | null {
+  const tracks: THREE.KeyframeTrack[] = [];
+  const bindTmp = new THREE.Quaternion();
+  const sampleTmp = new THREE.Quaternion();
+  const resultTmp = new THREE.Quaternion();
+
+  for (const track of sourceClip.tracks) {
+    const parsed = parseBvhTrack(track.name);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.property !== 'quaternion') {
+      continue;
+    }
+    if (!FINGER_TRACK_BONE_PATTERN.test(parsed.bone)) {
+      continue;
+    }
+
+    const targetBoneName = resolveTargetBoneName(parsed.bone, targetSkeleton);
+    if (!targetBoneName) {
+      continue;
+    }
+
+    // Drop tracks for the opposite side so left/right clips do not double
+    // up on the same finger bones.
+    if (sideFilter) {
+      const isLeft =
+        /left$/i.test(targetBoneName) || /^l(Thumb|Index|Middle|Ring|Pinky)/i.test(parsed.bone);
+      const isRight =
+        /right$/i.test(targetBoneName) || /^r(Thumb|Index|Middle|Ring|Pinky)/i.test(parsed.bone);
+      if (sideFilter === 'left' && !isLeft) continue;
+      if (sideFilter === 'right' && !isRight) continue;
+    }
+
+    const targetBone = targetSkeleton.getBoneByName(targetBoneName);
+    if (!targetBone) {
+      continue;
+    }
+
+    // SL stock hand BVHs are authored as a 2-frame clip where frame 1 is the
+    // rest (identity) pose and frame 2 is the actual hand pose. Playing both
+    // frames through AnimationMixer makes the fingers oscillate rapidly
+    // between bind pose and the target curl, which visually reads as
+    // multiple animations running on top of each other. Sample ONLY the
+    // last frame and emit it as a single static keyframe.
+    const srcValues = track.values;
+    const lastIndex = srcValues.length - 4;
+    if (lastIndex < 0) {
+      continue;
+    }
+    sampleTmp.fromArray(srcValues, lastIndex);
+
+    // The GLB SL skeleton inherits the VRM authored bind-pose rotation on
+    // each `mHand*` bone, which is generally NOT identity. Compose
+    // `q_bind * q_bvh` so identity BVH input leaves the bone at its VRM
+    // bind pose while non-identity samples apply the curl as a delta in
+    // the bind frame.
+    bindTmp.copy(targetBone.quaternion);
+    resultTmp.copy(bindTmp).multiply(sampleTmp);
+
+    const staticValues = new Float32Array(4);
+    resultTmp.toArray(staticValues, 0);
+
+    const cloned = new THREE.QuaternionKeyframeTrack(
+      `.bones[${targetBoneName}].quaternion`,
+      [0],
+      Array.from(staticValues)
+    );
+    tracks.push(cloned);
+  }
+
+  if (tracks.length === 0) {
+    return null;
+  }
+
+  // Use a short non-zero duration so AnimationMixer treats this as a clip;
+  // with a single keyframe the pose stays static regardless of duration.
+  return new THREE.AnimationClip(clipName, 1, tracks);
+}
+
+/**
  * Build a 4-second procedural idle clip for bones present in `targetSkeleton`.
  * Returns null when none of the target bones are found in the skeleton.
  */
@@ -327,158 +428,8 @@ export function buildProceduralIdleClip(
   return new THREE.AnimationClip('avatar_idle_synth', times.at(-1) ?? 4, tracks);
 }
 
-/**
- * Detect RPS pose name from a motion path.
- */
-export function detectRpsPoseName(sourceMotionPath?: string): RpsPoseName | null {
-  if (!sourceMotionPath) {
-    return null;
-  }
-  const path = sourceMotionPath.toLowerCase();
-  if (path.includes('rps_paper')) {
-    return 'paper';
-  }
-  if (path.includes('rps_rock')) {
-    return 'rock';
-  }
-  if (path.includes('rps_scissors')) {
-    return 'scissors';
-  }
-  return null;
-}
-
-/**
- * Build a static both-hands finger pose clip for RPS preview.
- * This is used when official RPS BVH files do not include finger tracks.
- */
-export function buildProceduralRpsHandClip(
-  targetSkeleton: THREE.Skeleton,
-  sourceMotionPath?: string
-): THREE.AnimationClip | null {
-  const pose = detectRpsPoseName(sourceMotionPath);
-  if (!pose) {
-    return null;
-  }
-
-  const times = [0, 1];
-  const closed: FingerEuler = { x: 55, y: 0, z: 0 };
-  const halfClosed: FingerEuler = { x: 30, y: 0, z: 0 };
-  const open: FingerEuler = { x: 0, y: 0, z: 0 };
-
-  const byPose: Record<RpsPoseName, Record<string, FingerEuler>> = {
-    paper: {
-      mHandIndex1Right: open,
-      mHandIndex2Right: open,
-      mHandIndex3Right: open,
-      mHandMiddle1Right: open,
-      mHandMiddle2Right: open,
-      mHandMiddle3Right: open,
-      mHandRing1Right: open,
-      mHandRing2Right: open,
-      mHandRing3Right: open,
-      mHandPinky1Right: open,
-      mHandPinky2Right: open,
-      mHandPinky3Right: open,
-      mHandIndex1Left: open,
-      mHandIndex2Left: open,
-      mHandIndex3Left: open,
-      mHandMiddle1Left: open,
-      mHandMiddle2Left: open,
-      mHandMiddle3Left: open,
-      mHandRing1Left: open,
-      mHandRing2Left: open,
-      mHandRing3Left: open,
-      mHandPinky1Left: open,
-      mHandPinky2Left: open,
-      mHandPinky3Left: open
-    },
-    rock: {
-      mHandIndex1Right: closed,
-      mHandIndex2Right: closed,
-      mHandIndex3Right: halfClosed,
-      mHandMiddle1Right: closed,
-      mHandMiddle2Right: closed,
-      mHandMiddle3Right: halfClosed,
-      mHandRing1Right: closed,
-      mHandRing2Right: closed,
-      mHandRing3Right: halfClosed,
-      mHandPinky1Right: closed,
-      mHandPinky2Right: closed,
-      mHandPinky3Right: halfClosed,
-      mHandIndex1Left: closed,
-      mHandIndex2Left: closed,
-      mHandIndex3Left: halfClosed,
-      mHandMiddle1Left: closed,
-      mHandMiddle2Left: closed,
-      mHandMiddle3Left: halfClosed,
-      mHandRing1Left: closed,
-      mHandRing2Left: closed,
-      mHandRing3Left: halfClosed,
-      mHandPinky1Left: closed,
-      mHandPinky2Left: closed,
-      mHandPinky3Left: halfClosed
-    },
-    scissors: {
-      mHandIndex1Right: open,
-      mHandIndex2Right: open,
-      mHandIndex3Right: open,
-      mHandMiddle1Right: open,
-      mHandMiddle2Right: open,
-      mHandMiddle3Right: open,
-      mHandRing1Right: closed,
-      mHandRing2Right: closed,
-      mHandRing3Right: halfClosed,
-      mHandPinky1Right: closed,
-      mHandPinky2Right: closed,
-      mHandPinky3Right: halfClosed,
-      mHandIndex1Left: open,
-      mHandIndex2Left: open,
-      mHandIndex3Left: open,
-      mHandMiddle1Left: open,
-      mHandMiddle2Left: open,
-      mHandMiddle3Left: open,
-      mHandRing1Left: closed,
-      mHandRing2Left: closed,
-      mHandRing3Left: halfClosed,
-      mHandPinky1Left: closed,
-      mHandPinky2Left: closed,
-      mHandPinky3Left: halfClosed
-    }
-  };
-
-  const toValues = (euler: FingerEuler): number[] => {
-    const q = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(
-        THREE.MathUtils.degToRad(euler.x),
-        THREE.MathUtils.degToRad(euler.y),
-        THREE.MathUtils.degToRad(euler.z),
-        'XYZ'
-      )
-    );
-    return [q.x, q.y, q.z, q.w, q.x, q.y, q.z, q.w];
-  };
-
-  const tracks: THREE.KeyframeTrack[] = [];
-  let targetPose: Record<string, FingerEuler>;
-  if (pose === 'paper') {
-    targetPose = byPose.paper;
-  } else if (pose === 'rock') {
-    targetPose = byPose.rock;
-  } else {
-    targetPose = byPose.scissors;
-  }
-  for (const [boneName, euler] of Object.entries(targetPose)) {
-    if (!targetSkeleton.getBoneByName(boneName)) {
-      continue;
-    }
-    tracks.push(
-      new THREE.QuaternionKeyframeTrack(`.bones[${boneName}].quaternion`, times, toValues(euler))
-    );
-  }
-
-  if (tracks.length === 0) {
-    return null;
-  }
-
-  return new THREE.AnimationClip(`avatar_rps_hand_${pose}`, 1, tracks);
-}
+// Removed: buildProceduralRpsHandClip / detectRpsPoseName
+// These were preview-only finger-pose injectors that masked the real bind-pose
+// problem.  Preview must reflect the exact behavior of the exported GLB in
+// Second Life; the actual fix is performed in backend/src/convert/skeleton/finger.rs
+// (finger bone bind-pose normalization with companion mesh vertex correction).

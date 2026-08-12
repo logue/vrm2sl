@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import * as THREE from 'three';
@@ -17,6 +17,7 @@ import {
   type PreviewMotionCategory,
   PREVIEW_CUSTOM_MOTION_OPTIONS
 } from '@/constants/previewAnimations';
+import { useConfigStore } from '@/store/ConfigStore';
 
 const props = defineProps<{
   filePath: string;
@@ -28,6 +29,11 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+// Forward the user's finger test-pose configuration so the preview can
+// overlay SL stock hand BVHs on idle/walk motions when enabled.
+const configStore = useConfigStore();
+const fingerTestSettings = toRef(configStore, 'fingers');
 
 const canvasHost = shallowRef<HTMLDivElement | null>(null);
 const animationEnabled = ref(true);
@@ -108,6 +114,7 @@ const { animationStatus, applyOrLoadAnimation, stopIdleAnimation, tickMixer, dis
     animationEnabled,
     selectedMotionMode,
     currentMotionPath,
+    fingerTestSettings,
     t
   });
 
