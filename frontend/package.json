@@ -1,6 +1,6 @@
 {
   "name": "@vrm2sl/frontend",
-  "version": "0.8.3-alpha.3",
+  "version": "0.8.4-alpha.4",
   "description": "Convert VRM avatars to Second Life format with ease",
   "license": "MIT",
   "type": "module",

@@ -6,6 +6,7 @@ allowBuilds:
   better-sqlite3: true
   core-js: true
   esbuild: true
+  unrs-resolver: true
 minimumReleaseAgeExclude:
   - js-yaml@5.3.0
 overrides:
