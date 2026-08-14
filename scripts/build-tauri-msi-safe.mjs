@@ -40,9 +40,29 @@ function runTauriBuild(configToUse, extraArgs) {
   });
 }
 
+async function syncEnv() {
+  return new Promise((resolve) => {
+    const syncPath = path.join(repoRoot, "scripts", "sync-env-config.mjs");
+    const child = spawn(process.execPath, [syncPath], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      shell: false,
+    });
+
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", () => resolve(1));
+  });
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const extraArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
+
+  // Sync environment and metadata from .env to tauri.conf.json
+  const syncCode = await syncEnv();
+  if (syncCode !== 0) {
+    process.exit(syncCode);
+  }
 
   if (process.platform !== "win32") {
     const code = await runTauriBuild(configPath, extraArgs);
