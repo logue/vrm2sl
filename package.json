@@ -47,7 +47,6 @@
     "preview:docs": "pnpm --filter docs preview",
     "type-check": "pnpm --recursive exec vue-tsc --build --force",
     "tauri": "pnpm --filter frontend tauri",
-    "prepare": "husky",
     "postinstall": "pnpm --filter docs nuxt:prepare"
   },
   "devDependencies": {
@@ -70,7 +69,6 @@
     "eslint-plugin-vuejs-accessibility": "^2.6.0",
     "eslint-plugin-vuetify": "^2.7.2",
     "eslint-plugin-yml": "^3.8.1",
-    "husky": "^9.1.7",
     "npm-run-all2": "^9.0.3",
     "oxlint": "^1.78.0",
     "postcss-html": "^2.0.0",
@@ -83,9 +81,9 @@
     "stylelint-config-recommended-vue": "^2.0.0",
     "stylelint-order": "^8.1.1",
     "stylelint-scss": "^7.2.0",
-    "typescript": "^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "typescript-eslint": "^8.67.0",
-    "yaml-eslint-parser": "^2.1.0",
-    "lint-staged": "^17.3.0"
+    "yaml-eslint-parser": "^2.1.0"
   }
 }

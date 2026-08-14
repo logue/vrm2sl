@@ -65,16 +65,22 @@ const options = ref<ConvertOptions>({
   manual_scale: manualScale.value,
   texture_auto_resize: textureAutoResize.value,
   texture_resize_method: textureResizeMethod.value,
-  pbr_enabled: pbrEnabled.value
+  pbr_enabled: pbrEnabled.value,
+  convert_fingers: fingers.value.enabled
 });
 
-watch([targetHeightCm, manualScale, textureAutoResize, pbrEnabled, textureResizeMethod], () => {
-  options.value.target_height_cm = targetHeightCm.value;
-  options.value.manual_scale = manualScale.value;
-  options.value.texture_auto_resize = textureAutoResize.value;
-  options.value.texture_resize_method = textureResizeMethod.value;
-  options.value.pbr_enabled = pbrEnabled.value;
-});
+watch(
+  [targetHeightCm, manualScale, textureAutoResize, pbrEnabled, textureResizeMethod, fingers],
+  () => {
+    options.value.target_height_cm = targetHeightCm.value;
+    options.value.manual_scale = manualScale.value;
+    options.value.texture_auto_resize = textureAutoResize.value;
+    options.value.texture_resize_method = textureResizeMethod.value;
+    options.value.pbr_enabled = pbrEnabled.value;
+    options.value.convert_fingers = fingers.value.enabled;
+  },
+  { deep: true }
+);
 
 watch(inputPath, (newPath, oldPath) => {
   // Clear output when switching to a different input VRM to avoid accidental overwrite.

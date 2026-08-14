@@ -12,4 +12,11 @@ export interface ConvertOptions {
   texture_resize_method: TextureResizeMethod;
   /** Enable PBR (Physically Based Rendering) material support. */
   pbr_enabled: boolean;
+  /**
+   * Enable finger bone renaming/reconstruction/normalization during export.
+   * When `false`, finger bones are left untouched (original VRM names,
+   * hierarchy, and bind pose) since finger bone conversion is not yet
+   * reliable for all sources. Sourced from `fingers.enabled`.
+   */
+  convert_fingers: boolean;
 }

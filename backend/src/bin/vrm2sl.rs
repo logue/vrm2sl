@@ -22,7 +22,7 @@ fn run() -> Result<()> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: vrm2sl <input.vrm> <output.glb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--pbr on|off] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
+            "Usage: vrm2sl <input.vrm> <output.glb> [--target-height <cm>] [--manual-scale <n>] [--resize on|off] [--resize-method bilinear|nearest|bicubic|gaussian|lanczos3] [--pbr on|off] [--fingers on|off] [--report <report.json>] [--validation-checklist <checklist.md>] [--analyze-only] [--load-settings <file.json>] [--save-settings <file.json>]"
         );
         process::exit(2);
     }
@@ -85,6 +85,15 @@ fn run() -> Result<()> {
                 };
                 index += 2;
             }
+            "--fingers" => {
+                let value = args.get(index + 1).context("--fingers requires on|off")?;
+                project_settings.fingers.enabled = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => bail!("--fingers must be on or off"),
+                };
+                index += 2;
+            }
             "--report" => {
                 let value = args.get(index + 1).context("--report requires a path")?;
                 report_path = Some(PathBuf::from(value));
@@ -129,6 +138,7 @@ fn run() -> Result<()> {
         texture_auto_resize: project_settings.texture_auto_resize,
         texture_resize_method: project_settings.texture_resize_method,
         pbr_enabled: project_settings.pbr_enabled,
+        convert_fingers: project_settings.fingers.enabled,
     };
 
     let analysis = analyze_vrm(&input, options)?;

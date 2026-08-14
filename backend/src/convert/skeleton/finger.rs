@@ -8,31 +8,7 @@ use super::super::gltf_utils::{
     accessor_meta, collect_parent_index_map_from_json, compute_node_world_matrices,
     node_to_local_matrix, read_joint_slot, read_weight_f32,
 };
-use super::super::types::{BENTO_BONE_MAP, BONE_MAP};
-
-/// Returns true when the VRM humanoid bone corresponds to a finger segment.
-fn is_vrm_finger_bone(vrm_bone_name: &str) -> bool {
-    const FINGER_BASES: [&str; 10] = [
-        "leftThumb",
-        "leftIndex",
-        "leftMiddle",
-        "leftRing",
-        "leftLittle",
-        "rightThumb",
-        "rightIndex",
-        "rightMiddle",
-        "rightRing",
-        "rightLittle",
-    ];
-    const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
-
-    FINGER_BASES.iter().any(|base| {
-        vrm_bone_name.starts_with(base)
-            && FINGER_SEGMENTS
-                .iter()
-                .any(|segment| vrm_bone_name.ends_with(segment))
-    })
-}
+use super::super::types::{BENTO_BONE_MAP, BONE_MAP, is_vrm_finger_bone};
 
 /// Returns true when authored local rotation must be preserved.
 ///
@@ -141,6 +117,7 @@ fn log_finger_euler_for_debug(label: &str, json: &Value) {
 pub(in super::super) fn normalize_sl_bone_rotations(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) -> Vec<Matrix4<f32>> {
     log_finger_euler_for_debug("before", json);
 
@@ -149,6 +126,7 @@ pub(in super::super) fn normalize_sl_bone_rotations(
     let mapped_sl_node_indices: HashSet<usize> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
+        .filter(|(vrm_name, _)| convert_fingers || !is_vrm_finger_bone(vrm_name))
         .filter_map(|(vrm_name, _)| humanoid_bone_nodes.get(*vrm_name).copied())
         .collect();
 

@@ -10,14 +10,20 @@ use super::super::gltf_utils::{
 };
 use super::super::types::{
     BENTO_BONE_MAP, BENTO_HIERARCHY_RELATIONS, BONE_MAP, CORE_HIERARCHY_RELATIONS, ValidationIssue,
+    is_vrm_finger_bone,
 };
 
 pub(in super::super) fn rename_bones(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) {
     if let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) {
-        for (source, target) in BONE_MAP.iter().chain(BENTO_BONE_MAP.iter()) {
+        for (source, target) in BONE_MAP
+            .iter()
+            .chain(BENTO_BONE_MAP.iter())
+            .filter(|(source, _)| convert_fingers || !is_vrm_finger_bone(source))
+        {
             if let Some(node_index) = humanoid_bone_nodes.get(*source).copied() {
                 if let Some(node) = nodes.get_mut(node_index) {
                     node["name"] = Value::String(target.to_string());
@@ -30,6 +36,7 @@ pub(in super::super) fn rename_bones(
 pub(in super::super) fn reconstruct_sl_core_hierarchy(
     json: &mut Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) {
     let original_node_locals: Vec<Matrix4<f32>> = json
         .get("nodes")
@@ -45,6 +52,7 @@ pub(in super::super) fn reconstruct_sl_core_hierarchy(
         for (parent, child) in CORE_HIERARCHY_RELATIONS
             .iter()
             .chain(BENTO_HIERARCHY_RELATIONS.iter())
+            .filter(|(_, child)| convert_fingers || !is_vrm_finger_bone(child))
         {
             let Some(parent_index) = humanoid_bone_nodes.get(*parent).copied() else {
                 continue;
@@ -139,6 +147,7 @@ pub(in super::super) fn reconstruct_sl_core_hierarchy(
 pub(in super::super) fn validate_bone_conversion_preconditions(
     json: &Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) -> Vec<ValidationIssue> {
     let node_count = json
         .get("nodes")
@@ -149,6 +158,7 @@ pub(in super::super) fn validate_bone_conversion_preconditions(
     BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
+        .filter(|(source, _)| convert_fingers || !is_vrm_finger_bone(source))
         .filter_map(|(source, _)| {
             let Some(node_index) = humanoid_bone_nodes.get(*source).copied() else {
                 return None;
@@ -173,12 +183,14 @@ pub(in super::super) fn validate_bone_conversion_preconditions(
 pub(in super::super) fn ensure_target_bones_exist_after_rename(
     json: &Value,
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) -> Result<()> {
     let node_name_set = collect_node_name_set_from_json(json);
 
     let expected_targets: Vec<String> = BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
+        .filter(|(source, _)| convert_fingers || !is_vrm_finger_bone(source))
         .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
         .map(|(_, target)| target.to_string())
         .collect();

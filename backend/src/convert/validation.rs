@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::types::{
     BENTO_BONE_MAP, BONE_MAP, REQUIRED_BONES, Severity, TextureInfo, UploadFeeEstimate,
-    ValidationIssue,
+    ValidationIssue, is_vrm_finger_bone,
 };
 
 // ─── Required parent-child relationships ──────────────────────────────────────
@@ -156,10 +156,12 @@ pub(super) fn validate_hierarchy(
 /// Return mapped source→target bone pairs present in the input model.
 pub(super) fn collect_mapped_bones(
     humanoid_bone_nodes: &HashMap<String, usize>,
+    convert_fingers: bool,
 ) -> Vec<(String, String)> {
     BONE_MAP
         .iter()
         .chain(BENTO_BONE_MAP.iter())
+        .filter(|(source, _)| convert_fingers || !is_vrm_finger_bone(source))
         .filter(|(source, _)| humanoid_bone_nodes.contains_key(*source))
         .map(|(source, target)| (source.to_string(), target.to_string()))
         .collect()

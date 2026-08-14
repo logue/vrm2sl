@@ -173,6 +173,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
     issues.extend(validate_bone_conversion_preconditions(
         &input_json,
         &humanoid_bone_nodes,
+        options.convert_fingers,
     ));
 
     let (total_vertices, total_polygons, mut geometry_issues) = collect_mesh_statistics(&document);
@@ -242,7 +243,7 @@ pub fn analyze_vrm(input_path: &Path, options: ConvertOptions) -> Result<Analysi
         mesh_count: document.meshes().count(),
         total_vertices,
         total_polygons,
-        mapped_bones: collect_mapped_bones(&humanoid_bone_nodes),
+        mapped_bones: collect_mapped_bones(&humanoid_bone_nodes, options.convert_fingers),
         missing_required_bones,
         texture_infos,
         fee_estimate,
@@ -296,6 +297,7 @@ pub fn convert_vrm_to_gdb(
         options.texture_auto_resize,
         options.texture_resize_method,
         options.pbr_enabled,
+        options.convert_fingers,
     )?;
 
     let diagnostic_path = diagnostic_log_path_for_output(output_path);
@@ -353,6 +355,7 @@ fn transform_and_write_glb(
     texture_auto_resize: bool,
     texture_resize_method: ResizeInterpolation,
     pbr_enabled: bool,
+    convert_fingers: bool,
 ) -> Result<()> {
     let bytes = fs::read(input_path)
         .with_context(|| format!("failed to read input file: {}", input_path.display()))?;
@@ -363,15 +366,20 @@ fn transform_and_write_glb(
     let had_bin = glb.bin.is_some();
     let mut bin = glb.bin.map(|chunk| chunk.into_owned()).unwrap_or_default();
 
-    rename_bones(&mut json, humanoid_bone_nodes);
-    ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes)?;
-    reconstruct_sl_core_hierarchy(&mut json, humanoid_bone_nodes);
+    rename_bones(&mut json, humanoid_bone_nodes, convert_fingers);
+    ensure_target_bones_exist_after_rename(&json, humanoid_bone_nodes, convert_fingers)?;
+    reconstruct_sl_core_hierarchy(&mut json, humanoid_bone_nodes, convert_fingers);
     // Normalize all SL-mapped bone rotations to identity while preserving
     // their world-space positions.  Second Life reads bone bind positions from
     // the inverse-bind-matrix translations and applies its own (identity)
     // orientations in the SL skeleton; any non-identity rotation baked into
     // the node hierarchy will therefore cause incorrect deformation.
-    let pre_normalization_worlds = normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes);
+    //
+    // When `convert_fingers` is disabled, finger bones are excluded from this
+    // step entirely (kept at their original authored transform) because the
+    // current finger bone conversion does not work reliably for all sources.
+    let pre_normalization_worlds =
+        normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes, convert_fingers);
 
     // Stage-C opt-in: when finger bone bind-pose normalization is enabled
     // (via env `VRM2SL_NORMALIZE_FINGERS`), the authored finger rotations are
@@ -395,8 +403,11 @@ fn transform_and_write_glb(
     // Hand-side helpers remain untouched to avoid reintroducing finger issues.
     remap_secondary_chest_head_weights(&mut json, &mut bin, humanoid_bone_nodes);
     // Prevent cross-finger skinning blends (e.g. index+middle on same vertex)
-    // from pulling fingers inward during Bento hand animations.
-    cleanup_cross_finger_family_weights(&mut json, &mut bin);
+    // from pulling fingers inward during Bento hand animations. Skipped when
+    // finger bones were not converted, since no mHand* joint names exist yet.
+    if convert_fingers {
+        cleanup_cross_finger_family_weights(&mut json, &mut bin);
+    }
     soften_face_eye_influences(&mut json, &mut bin);
     collapse_secondary_head_skins_to_primary(&mut json, &mut bin, humanoid_bone_nodes);
     // Reassign Face and Hair mesh nodes to the primary (Body) skin so that SL
@@ -965,7 +976,7 @@ mod tests {
             .into_iter()
             .collect::<HashMap<String, usize>>();
 
-        let issues = validate_bone_conversion_preconditions(&input_json, &humanoid_bone_nodes);
+        let issues = validate_bone_conversion_preconditions(&input_json, &humanoid_bone_nodes, true);
         assert!(
             issues
                 .iter()
@@ -986,7 +997,7 @@ mod tests {
             .into_iter()
             .collect::<HashMap<String, usize>>();
 
-        let result = ensure_target_bones_exist_after_rename(&input_json, &humanoid_bone_nodes);
+        let result = ensure_target_bones_exist_after_rename(&input_json, &humanoid_bone_nodes, true);
         assert!(result.is_err());
     }
 
@@ -1004,7 +1015,7 @@ mod tests {
         });
 
         let humanoid = HashMap::from([("leftUpperArm".to_string(), 0usize)]);
-        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid, true);
         let rotation = input_json
             .pointer("/nodes/0/rotation")
             .and_then(Value::as_array)
@@ -1043,7 +1054,7 @@ mod tests {
         });
 
         let humanoid = HashMap::from([("leftIndexProximal".to_string(), 0usize)]);
-        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid, true);
 
         let rotation = input_json
             .pointer("/nodes/0/rotation")
@@ -1088,7 +1099,7 @@ mod tests {
             &collect_parent_index_map_from_json(&input_json),
         );
 
-        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid, true);
 
         let after_locals = input_json["nodes"]
             .as_array()
@@ -1166,7 +1177,7 @@ mod tests {
         });
 
         let humanoid = HashMap::from([("leftIndexIntermediate".to_string(), 0usize)]);
-        normalize_sl_bone_rotations(&mut input_json, &humanoid);
+        normalize_sl_bone_rotations(&mut input_json, &humanoid, true);
 
         let rotation = input_json
             .pointer("/nodes/0/rotation")
@@ -1247,7 +1258,7 @@ mod tests {
 
         let humanoid = HashMap::from([("chest".to_string(), 0usize), ("neck".to_string(), 2usize)]);
 
-        normalize_sl_bone_rotations(&mut json, &humanoid);
+        normalize_sl_bone_rotations(&mut json, &humanoid, true);
 
         let upper_chest_rotation = json["nodes"][1]
             .get("rotation")
@@ -1305,7 +1316,7 @@ mod tests {
         let before_world =
             compute_node_world_matrices(&before_locals, &collect_parent_index_map_from_json(&json));
 
-        normalize_sl_bone_rotations(&mut json, &humanoid);
+        normalize_sl_bone_rotations(&mut json, &humanoid, true);
 
         let after_locals = json["nodes"]
             .as_array()
@@ -1381,7 +1392,7 @@ mod tests {
             ("leftFoot".to_string(), 10usize),
         ]);
 
-        reconstruct_sl_core_hierarchy(&mut json, &humanoid);
+        reconstruct_sl_core_hierarchy(&mut json, &humanoid, true);
 
         let hips_children = json
             .pointer("/nodes/0/children")
@@ -1429,7 +1440,7 @@ mod tests {
             ("leftIndexDistal".to_string(), 4usize),
         ]);
 
-        rename_bones(&mut json, &humanoid);
+        rename_bones(&mut json, &humanoid, true);
 
         assert_eq!(
             json.pointer("/nodes/0/name").and_then(Value::as_str),
@@ -1454,6 +1465,50 @@ mod tests {
     }
 
     #[test]
+    fn given_fingers_disabled_when_renaming_then_only_finger_names_are_left_unmapped() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {"name":"leftEye"},
+                {"name":"jaw"},
+                {"name":"leftIndexProximal"},
+                {"name":"leftIndexIntermediate"},
+                {"name":"leftIndexDistal"}
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("leftEye".to_string(), 0usize),
+            ("jaw".to_string(), 1usize),
+            ("leftIndexProximal".to_string(), 2usize),
+            ("leftIndexIntermediate".to_string(), 3usize),
+            ("leftIndexDistal".to_string(), 4usize),
+        ]);
+
+        rename_bones(&mut json, &humanoid, false);
+
+        assert_eq!(
+            json.pointer("/nodes/0/name").and_then(Value::as_str),
+            Some("mEyeLeft")
+        );
+        assert_eq!(
+            json.pointer("/nodes/1/name").and_then(Value::as_str),
+            Some("mFaceJaw")
+        );
+        assert_eq!(
+            json.pointer("/nodes/2/name").and_then(Value::as_str),
+            Some("leftIndexProximal")
+        );
+        assert_eq!(
+            json.pointer("/nodes/3/name").and_then(Value::as_str),
+            Some("leftIndexIntermediate")
+        );
+        assert_eq!(
+            json.pointer("/nodes/4/name").and_then(Value::as_str),
+            Some("leftIndexDistal")
+        );
+    }
+
+    #[test]
     fn given_bento_hand_chain_when_reconstructing_then_finger_chain_is_relinked() {
         let mut json = serde_json::json!({
             "nodes": [
@@ -1474,7 +1529,7 @@ mod tests {
             ("leftIndexDistal".to_string(), 3usize),
         ]);
 
-        reconstruct_sl_core_hierarchy(&mut json, &humanoid);
+        reconstruct_sl_core_hierarchy(&mut json, &humanoid, true);
 
         let hand_children = json
             .pointer("/nodes/0/children")
@@ -1496,6 +1551,44 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(idx2_children.contains(&Value::from(3u64)));
+    }
+
+    #[test]
+    fn given_fingers_disabled_when_reconstructing_then_finger_chain_is_left_untouched() {
+        let mut json = serde_json::json!({
+            "nodes": [
+                {"name":"mWristLeft", "children":[]},
+                {"name":"leftIndexProximal", "children":[]},
+                {"name":"leftIndexIntermediate", "children":[]},
+                {"name":"leftIndexDistal", "children":[]}
+            ],
+            "scenes": [
+                {"nodes":[0,1,2,3]}
+            ]
+        });
+
+        let humanoid = HashMap::from([
+            ("leftHand".to_string(), 0usize),
+            ("leftIndexProximal".to_string(), 1usize),
+            ("leftIndexIntermediate".to_string(), 2usize),
+            ("leftIndexDistal".to_string(), 3usize),
+        ]);
+
+        reconstruct_sl_core_hierarchy(&mut json, &humanoid, false);
+
+        let hand_children = json
+            .pointer("/nodes/0/children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!hand_children.contains(&Value::from(1u64)));
+
+        let scene_roots = json
+            .pointer("/scenes/0/nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(scene_roots.contains(&Value::from(1u64)));
     }
 
     #[test]

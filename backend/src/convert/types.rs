@@ -86,6 +86,33 @@ pub(super) const BENTO_BONE_MAP: [(&str, &str); 33] = [
     ("rightLittleDistal", "mHandPinky3Right"),
 ];
 
+/// Returns true when `vrm_bone_name` is a VRM humanoid finger segment (e.g.
+/// `leftThumbProximal`, `rightIndexDistal`). Used to filter finger entries
+/// out of [`BENTO_BONE_MAP`] / [`BENTO_HIERARCHY_RELATIONS`] when finger bone
+/// conversion is disabled via [`ConvertOptions::convert_fingers`].
+pub(super) fn is_vrm_finger_bone(vrm_bone_name: &str) -> bool {
+    const FINGER_BASES: [&str; 10] = [
+        "leftThumb",
+        "leftIndex",
+        "leftMiddle",
+        "leftRing",
+        "leftLittle",
+        "rightThumb",
+        "rightIndex",
+        "rightMiddle",
+        "rightRing",
+        "rightLittle",
+    ];
+    const FINGER_SEGMENTS: [&str; 3] = ["Proximal", "Intermediate", "Distal"];
+
+    FINGER_BASES.iter().any(|base| {
+        vrm_bone_name.starts_with(base)
+            && FINGER_SEGMENTS
+                .iter()
+                .any(|segment| vrm_bone_name.ends_with(segment))
+    })
+}
+
 /// Core hierarchy edges to reconstruct for SL-compatible humanoid skeleton.
 ///
 /// **Fallback** relations (`chest → leftUpperArm`, `chest → rightUpperArm`) are
@@ -170,6 +197,17 @@ pub struct ConvertOptions {
     pub texture_resize_method: ResizeInterpolation,
     /// Enable PBR (Physically Based Rendering) material support.
     pub pbr_enabled: bool,
+    /// Enable finger bone renaming/reconstruction/normalization. When
+    /// `false`, finger bones are left untouched (original VRM names,
+    /// hierarchy, and bind pose) because the current finger bone conversion
+    /// does not work reliably for all sources; disabling it lets the rest of
+    /// the skeleton still convert cleanly.
+    #[serde(default = "default_convert_fingers")]
+    pub convert_fingers: bool,
+}
+
+fn default_convert_fingers() -> bool {
+    true
 }
 
 impl Default for ConvertOptions {
@@ -180,6 +218,7 @@ impl Default for ConvertOptions {
             texture_auto_resize: true,
             texture_resize_method: ResizeInterpolation::Bilinear,
             pbr_enabled: true,
+            convert_fingers: true,
         }
     }
 }
