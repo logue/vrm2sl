@@ -24,6 +24,7 @@ tauri-build = { version = "2.6.3", features = [] }
 anyhow = "1.0.104"
 base64 = "0.23.1"
 gltf = { version = "1.4.1", features = ["import", "names"] }
+glib = "0.22.8"
 nalgebra = "0.35.0"
 image = "0.25.10"
 serde = "1.0.229"
