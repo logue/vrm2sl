@@ -381,12 +381,15 @@ fn transform_and_write_glb(
     let pre_normalization_worlds =
         normalize_sl_bone_rotations(&mut json, humanoid_bone_nodes, convert_fingers);
 
-    // Stage-C opt-in: when finger bone bind-pose normalization is enabled
-    // (via env `VRM2SL_NORMALIZE_FINGERS`), the authored finger rotations are
-    // also reset to identity above.  This shifts the bind pose of every finger
-    // joint, so the skinned mesh vertices must be transformed by the same
-    // delta to keep the rest-pose hand visually unchanged; otherwise fingers
-    // visibly stretch / collapse on the exported avatar.
+    // Finger bone bind-pose normalization is enabled by default (see
+    // `finger_normalization_enabled`, overridable via env
+    // `VRM2SL_NORMALIZE_FINGERS` for debugging), so the authored finger
+    // rotations are also reset to identity above, matching SL's Bento finger
+    // bones which are driven by BVH relative to an identity-rotation rest
+    // pose. This shifts the bind pose of every finger joint, so the skinned
+    // mesh vertices must be transformed by the same delta to keep the
+    // rest-pose hand visually unchanged; otherwise fingers visibly stretch /
+    // collapse on the exported avatar.
     //
     // Wrist / non-finger bones still use the previous "preserve rotation"
     // path (see `should_preserve_rotation`), and this correction safely
@@ -394,8 +397,9 @@ fn transform_and_write_glb(
     if finger_normalization_enabled() {
         correct_mesh_vertices_for_bind_pose_change(&json, &mut bin, &pre_normalization_worlds)?;
     } else {
-        // Legacy behaviour: skip mesh correction because fingers retained
-        // their authored rotation, so no bind-pose delta exists for them.
+        // Legacy behaviour (env override): skip mesh correction because
+        // fingers retained their authored rotation, so no bind-pose delta
+        // exists for them.
         let _ = pre_normalization_worlds;
     }
     // Remap chest/head-adjacent secondary helpers that SL ignores in preview
@@ -1034,12 +1038,12 @@ mod tests {
     }
 
     #[test]
-    fn given_non_thumb_finger_proximal_when_normalizing_then_local_rotation_is_preserved() {
-        let original_rotation = vec![
+    fn given_non_thumb_finger_proximal_when_normalizing_then_local_rotation_is_reset_to_identity() {
+        let identity_rotation = vec![
             Value::from(0.0),
-            Value::from(0.12),
-            Value::from(-0.04),
-            Value::from(0.99),
+            Value::from(0.0),
+            Value::from(0.0),
+            Value::from(1.0),
         ];
 
         let mut input_json = serde_json::json!({
@@ -1062,7 +1066,7 @@ mod tests {
             .cloned()
             .unwrap_or_default();
 
-        assert_eq!(rotation, original_rotation);
+        assert_eq!(rotation, identity_rotation);
     }
 
     #[test]
@@ -1149,20 +1153,21 @@ mod tests {
             finger_rotation,
             vec![
                 Value::from(0.0),
-                Value::from(0.12),
-                Value::from(-0.04),
-                Value::from(0.99)
+                Value::from(0.0),
+                Value::from(0.0),
+                Value::from(1.0)
             ]
         );
     }
 
     #[test]
-    fn given_non_thumb_finger_intermediate_when_normalizing_then_local_rotation_is_preserved() {
-        let original_rotation = vec![
+    fn given_non_thumb_finger_intermediate_when_normalizing_then_local_rotation_is_reset_to_identity()
+     {
+        let identity_rotation = vec![
             Value::from(0.0),
-            Value::from(0.12),
-            Value::from(-0.04),
-            Value::from(0.99),
+            Value::from(0.0),
+            Value::from(0.0),
+            Value::from(1.0),
         ];
 
         let mut input_json = serde_json::json!({
@@ -1185,7 +1190,7 @@ mod tests {
             .cloned()
             .unwrap_or_default();
 
-        assert_eq!(rotation, original_rotation);
+        assert_eq!(rotation, identity_rotation);
     }
 
     fn extract_bvh_joint_offset(bvh: &str, joint_name: &str) -> Option<Vector3<f32>> {

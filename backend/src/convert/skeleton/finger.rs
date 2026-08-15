@@ -15,9 +15,12 @@ use super::super::types::{BENTO_BONE_MAP, BONE_MAP, is_vrm_finger_bone};
 /// Eyes and wrist are always preserved because their authored basis is
 /// required for correct gaze/wrist deformation in SL.
 ///
-/// Fingers are preserved only when finger normalization is disabled (legacy
-/// behavior).  When [`finger_normalization_enabled`] returns true, fingers
-/// fall through to identity-rotation normalization, and the caller must run
+/// Fingers are normalized to identity rotation (relative to the armature's
+/// rest pose) by default, matching how every other SL-mapped bone is
+/// normalized: SL's Bento finger bones are driven by BVH assuming an
+/// identity-rotation rest pose, so keeping VRoid's authored (non-identity)
+/// finger rotation causes the rotation to compound and the fingers to
+/// visibly break down. The caller must run
 /// [`correct_mesh_vertices_for_bind_pose_change`] to compensate the bind-pose
 /// change on the skinned mesh; otherwise fingers will visibly stretch.
 fn should_preserve_rotation(vrm_bone_name: &str, normalize_fingers: bool) -> bool {
@@ -33,15 +36,16 @@ fn should_preserve_rotation(vrm_bone_name: &str, normalize_fingers: bool) -> boo
     false
 }
 
-/// Stage-C opt-in: enable SL bind-pose normalization for finger bones plus
-/// the companion skinned-vertex correction.  Controlled by the environment
-/// variable `VRM2SL_NORMALIZE_FINGERS`.
+/// Enables SL bind-pose normalization for finger bones plus the companion
+/// skinned-vertex correction. Enabled by default; can be forced off via the
+/// environment variable `VRM2SL_NORMALIZE_FINGERS` for debugging/comparison
+/// against the legacy (authored-rotation-preserving) behavior.
 ///
-/// Accepts truthy values: anything other than empty / `0` / `false` / `off`.
+/// Accepts falsy override values: empty / `0` / `false` / `off`.
 pub(in super::super) fn finger_normalization_enabled() -> bool {
     match std::env::var("VRM2SL_NORMALIZE_FINGERS") {
         Ok(v) => !matches!(v.to_ascii_lowercase().as_str(), "" | "0" | "false" | "off"),
-        Err(_) => false,
+        Err(_) => true,
     }
 }
 
